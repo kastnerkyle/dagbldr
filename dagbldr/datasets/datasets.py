@@ -1061,171 +1061,147 @@ def fetch_iamondb():
     partial_path = check_fetch_iamondb()
     pickle_path = os.path.join(partial_path, "iamondb_saved.pkl")
     if not os.path.exists(pickle_path):
-        files_path = os.path.join(partial_path, "task1.tar.gz")
+        input_file = os.path.join(partial_path, 'lineStrokes-all.tar.gz')
+        raw_data = tarfile.open(input_file)
+        transcript_files = []
+        strokes = []
+        idx = 0
+        for member in raw_data.getmembers():
+            if member.isreg():
+                transcript_files.append(member.name)
+                content = raw_data.extractfile(member)
+                tree = etree.parse(content)
+                root = tree.getroot()
+                content.close()
+                points = []
+                for StrokeSet in root:
+                    for i, Stroke in enumerate(StrokeSet):
+                        for Point in Stroke:
+                            points.append([i,
+                                int(Point.attrib['x']),
+                                int(Point.attrib['y'])])
+                points = np.array(points)
+                points[:, 2] = -points[:, 2]
+                change_stroke = points[:-1, 0] != points[1:, 0]
+                pen_up = points[:, 0] * 0
+                pen_up[:-1][change_stroke] = 1
+                pen_up[-1] = 1
+                points[:, 0] = pen_up
+                strokes.append(points)
+                idx += 1
 
-        with tarfile.open(files_path) as tf:
-            train_file = [fname for fname in tf.getnames()
-                          if "trainset" in fname][0]
+        strokes_bp = strokes
 
-            def _s(lines):
-                return [l.strip().decode("utf-8") for l in lines]
+        strokes = [x[1:] - x[:-1] for x in strokes]
+        strokes = [np.vstack([[0, 0, 0], x]) for x in strokes]
 
-            f = tf.extractfile(train_file)
-            train_names = _s(f.readlines())
+        for i, stroke in enumerate(strokes):
+            strokes[i][:, 0] = strokes_bp[i][:, 0]
 
-            valid_files = [fname for fname in tf.getnames()
-                           if "testset" in fname]
-            valid_names = []
-            for v in valid_files:
-                f = tf.extractfile(v)
-                valid_names.extend(_s(f.readlines()))
+        # Computing mean and variance seems to not be necessary.
+        # Training is going slower than just scaling.
 
-        strokes_path = os.path.join(partial_path, "lineStrokes-all.tar.gz")
-        ascii_path = os.path.join(partial_path, "ascii-all.tar.gz")
-        lsf = tarfile.open(strokes_path)
-        af = tarfile.open(ascii_path)
-        sf = [fs for fs in lsf.getnames() if ".xml" in fs]
+        data_mean = np.array([0., 0., 0.])
+        data_std = np.array([1., 20., 20.])
 
-        def construct_ascii_path(f):
-            primary_dir = f.split("-")[0]
-            if f[-1].isalpha():
-                sub_dir = f[:-1]
-            else:
-                sub_dir = f
-            file_path = os.path.join("ascii", primary_dir, sub_dir, f + ".txt")
-            return file_path
+        strokes = [(x - data_mean) / data_std for x in strokes]
 
-        def construct_stroke_paths(f):
-            primary_dir = f.split("-")[0]
-            if f[-1].isalpha():
-                sub_dir = f[:-1]
-            else:
-                sub_dir = f
-            files_path = os.path.join("lineStrokes", primary_dir, sub_dir)
+        transcript_files = [x.split(os.sep)[-1]
+                            for x in transcript_files]
+        transcript_files = [re.sub('-[0-9][0-9].xml', '.txt', x)
+                            for x in transcript_files]
 
-            # Dash is crucial to obtain correct match!
-            files = [sif for sif in sf if f in sif]
-            files = sorted(files, key=lambda x: int(
-                x.split(os.sep)[-1].split("-")[-1][:-4]))
-            return files
+        counter = Counter(transcript_files)
 
-        train_ascii_files = [construct_ascii_path(fta) for fta in train_names]
-        valid_ascii_files = [construct_ascii_path(fva) for fva in valid_names]
-        train_stroke_files = [construct_stroke_paths(fts)
-                              for fts in train_names]
-        valid_stroke_files = [construct_stroke_paths(fvs)
-                              for fvs in valid_names]
+        input_file = os.path.join(partial_path, 'ascii-all.tar.gz')
 
-        train_set_files = list(zip(train_stroke_files, train_ascii_files))
-        valid_set_files = list(zip(valid_stroke_files, valid_ascii_files))
+        raw_data = tarfile.open(input_file)
+        member = raw_data.getmembers()[10]
 
-        dataset_storage = {}
-        x_set = []
-        y_set = []
-        char_set = []
-        for sn, se in enumerate([train_set_files, valid_set_files]):
-            for n, (strokes_files, ascii_file) in enumerate(se):
-                if n % 100 == 0:
-                    print("Processing file %i of %i" % (n, len(se)))
-                fp = af.extractfile(ascii_file)
-                cleaned = [t.strip().decode("utf-8") for t in fp.readlines()
-                           if t != '\r\n'
-                           and t != ' \n'
-                           and t != '\n'
-                           and t != ' \r\n']
+        all_transcripts = []
+        for member in raw_data.getmembers():
+            if member.isreg() and member.name.split("/")[-1] in transcript_files:
+                fp = raw_data.extractfile(member)
+
+                cleaned = [t.strip() for t in fp.readlines()
+                        if t != '\r\n'
+                        and t != '\n'
+                        and t != '\r\n'
+                        and t.strip() != '']
 
                 # Try using CSR
-                idx = [w for w, li in enumerate(cleaned) if li == "CSR:"][0]
+                idx = [n for n, li in enumerate(cleaned) if li == "CSR:"][0]
                 cleaned_sub = cleaned[idx + 1:]
                 corrected_sub = []
-
                 for li in cleaned_sub:
                     # Handle edge case with %%%%% meaning new line?
                     if "%" in li:
                         li2 = re.sub('\%\%+', '%', li).split("%")
-                        li2 = ''.join([l.strip() for l in li2])
-                        corrected_sub.append(li2)
+                        li2 = [l.strip() for l in li2]
+                        corrected_sub.extend(li2)
                     else:
                         corrected_sub.append(li)
-                corrected_sub = [c for c in corrected_sub if c != '']
-                fp.close()
 
-                n_one_hot = 57
-                y = [np.zeros((len(li), n_one_hot), dtype='int16')
-                     for li in corrected_sub]
+                if counter[member.name.split("/")[-1]] != len(corrected_sub):
+                    pass
 
-                # A-Z, a-z, space, apostrophe, comma, period
-                charset = list(range(65, 90 + 1)) + list(range(97, 122 + 1)) + [
-                    32, 39, 44, 46]
-                tmap = {k: w + 1 for w, k in enumerate(charset)}
+                all_transcripts.extend(corrected_sub)
 
-                # 0 for UNK/other
-                tmap[0] = 0
+        # Last file transcripts are almost garbage
+        all_transcripts[-1]= 'A move to stop'
+        all_transcripts.append('garbage')
+        all_transcripts.append('A move to stop')
+        all_transcripts.append('garbage')
+        all_transcripts.append('A move to stop')
+        all_transcripts.append('A move to stop')
+        all_transcripts.append('Marcus Luvki')
+        all_transcripts.append('Hallo Well')
+        # Remove outliers and big / small sequences
+        # Makes a BIG difference.
+        filter_ = [len(x) <= 1200 and len(x) >= 300 and
+                    x.max() <= 100 and x.min() >= -50 for x in strokes]
 
-                def tokenize_ind(line):
-                    t = [ord(c) if ord(c) in charset else 0 for c in line]
-                    r = [tmap[i] for i in t]
-                    return r
+        strokes = [x for x, cond in zip(strokes, filter_) if cond]
+        all_transcripts = [x for x, cond in zip(all_transcripts, filter_) if cond]
 
-                for n, li in enumerate(corrected_sub):
-                    y[n][np.arange(len(li)), tokenize_ind(li)] = 1
+        num_examples = len(strokes)
 
-                x = []
-                for stroke_file in strokes_files:
-                    fp = lsf.extractfile(stroke_file)
-                    tree = etree.parse(fp)
-                    root = tree.getroot()
-                    # Get all the values from the XML
-                    # 0th index is stroke ID, will become up/down
-                    s = np.array([[i, int(Point.attrib['x']),
-                                   int(Point.attrib['y'])]
-                                  for StrokeSet in root
-                                  for i, Stroke in enumerate(StrokeSet)
-                                  for Point in Stroke])
+        # Shuffle for train/validation/test division
+        rng = np.random.RandomState(1999)
+        shuffle_idx = rng.permutation(num_examples)
 
-                    # flip y axis
-                    s[:, 2] = -s[:, 2]
+        strokes = [strokes[x] for x in shuffle_idx]
+        all_transcripts = [all_transcripts[x] for x in shuffle_idx]
 
-                    # Get end of stroke points
-                    c = s[1:, 0] != s[:-1, 0]
-                    ci = np.where(c == True)[0]
-                    nci = np.where(c == False)[0]
+        n_one_hot = 57
+        y = [np.zeros((len(li), n_one_hot), dtype='int16')
+                    for li in all_transcripts]
 
-                    # set pen down
-                    s[0, 0] = 0
-                    s[nci, 0] = 0
+        # A-Z, a-z, space, apostrophe, comma, period
+        charset = list(range(65, 90 + 1)) + list(range(97, 122 + 1)) + [
+            32, 39, 44, 46]
+        tmap = {k: w + 1 for w, k in enumerate(charset)}
 
-                    # set pen up
-                    s[ci, 0] = 1
-                    s[-1, 0] = 1
-                    x.append(s)
-                    fp.close()
+        # 0 for UNK/other
+        tmap[0] = 0
 
-                if len(x) != len(y):
-                    x_t = np.vstack((x[-2], x[-1]))
-                    x = x[:-2] + [x_t]
+        def tokenize_ind(line):
+            t = [ord(c) if ord(c) in charset else 0 for c in line]
+            r = [tmap[i] for i in t]
+            return r
 
-                if len(x) == len(y):
-                    x_set.extend(x)
-                    y_set.extend(y)
-                    char_set.extend(corrected_sub)
-                else:
-                    print("Skipping %i, couldn't make x and y len match!" % n)
-            if sn == 0:
-                dataset_storage["train_indices"] = np.arange(len(x_set))
-            elif sn == 1:
-                offset = dataset_storage["train_indices"][-1] + 1
-                dataset_storage["valid_indices"] = np.arange(offset, len(x_set))
-                dataset_storage["data"] = np.array(x_set)
-                dataset_storage["target"] = np.array(y_set)
-                dataset_storage["target_phrases"] = char_set
-                dataset_storage["vocabulary_size"] = n_one_hot
-                c = "".join([chr(a) for a in [ord("-")] + charset])
-                dataset_storage["vocabulary"] = c
-            else:
-                raise ValueError("Undefined number of files")
+        for n, li in enumerate(all_transcripts):
+            y[n][np.arange(len(li)), tokenize_ind(li)] = 1
+
+        pickle_dict = {}
+        pickle_dict["target_phrases"] = all_transcripts
+        pickle_dict["vocabulary_size"] = n_one_hot
+        c = "".join([chr(a) for a in [ord("-")] + charset])
+        pickle_dict["vocabulary"] = c
+        pickle_dict["data"] = strokes
+        pickle_dict["target"] = y
         f = open(pickle_path, "wb")
-        pickle.dump(dataset_storage, f, -1)
+        pickle.dump(pickle_dict, f, -1)
         f.close()
     with open(pickle_path, "rb") as f:
         pickle_dict = pickle.load(f)

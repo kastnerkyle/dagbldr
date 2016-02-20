@@ -483,7 +483,7 @@ def np_identity(shape, random_state, scale=0.98):
     References
     ----------
     A Simple Way To Initialize Recurrent Networks of Rectified Linear Units
-        Q. Le, N. Jaitly, G. Hinton
+        Q. Le, N. J, G. Hinton
     """
     assert shape[0] == shape[1]
     res = np.eye(shape[0])
@@ -1180,14 +1180,11 @@ def location_attention_tanh_recurrent_layer(list_of_outputs,
                                name + "_loc_att_tanh_context",
                                axis=list_of_contexts[0].ndim - 1)
     init_context = conc_context.mean(axis=0)
+    shifted = tensor.zeros_like(conc_output)
     # Decoder initializes hidden state with tanh projection of last hidden
     # context representing p(X_1...X_t)
     shp = calc_expected_dims(graph, conc_context)[-2:]
     minibatch_size, conc_context_dim = shp
-    """
-    h0_sym = tanh_layer([init_context], graph, name + '_h0_proj',
-                         proj_dim=conc_context_dim, random_state=random_state)
-    """
     shifted = tensor.zeros_like(conc_output)
     shifted = tensor.set_subtensor(shifted[1:], conc_output[:-1])
     input_shifted = shifted
@@ -1246,38 +1243,51 @@ def location_attention_tanh_recurrent_layer(list_of_outputs,
             return arr[:, :, n * dim:(n + 1) * dim]
         return arr[:, n * dim:(n + 1) * dim]
 
-    def step(x_t, xm_t, h_tm1, k_tm1, c, cm, U, W_c, b_c, W_ch, b_ch, s):
-        window_ti = tensor.dot(h_tm1, W_c) + b_c
-        alpha_t = tensor.exp(_slice(window_ti, 0))
-        beta_t = tensor.exp(_slice(window_ti, 1))
-        kappa_t = k_tm1 + tensor.exp(
-            _slice(window_ti, 2) + 1E-6)
-        sq_tx = (kappa_t[:, None, :] - s[None, :, None]) ** 2
-        mixture_t = alpha_t[:, None, :] * tensor.exp(
-            -beta_t[:, None, :] * sq_tx)
-        phi_tx = mixture_t.sum(axis=2)
-        masked_c = (c * cm[:, :, None])
-        masked_c = masked_c.dimshuffle(1, 0, 2)
-        window_t = (phi_tx[:, :, None] * masked_c).sum(axis=1)
-        proj_w = tensor.dot(window_t, W_ch) + b_ch
-        h_ti = tensor.tanh(x_t + tensor.dot(h_tm1, U) + proj_w)
+    h0_sym = tanh_layer([init_context], graph, name + '_h0_proj',
+                        proj_dim=hidden_dim, random_state=random_state)
+    initial_hidden_sym = h0_sym
+    # tensor.cast(tensor.alloc(0., minibatch_size, hidden_dim), theano.config.floatX)
+    initial_window_sym = tensor.cast(
+        tensor.alloc(0., minibatch_size, conc_context_dim),
+        theano.config.floatX)
+    initial_kappa_sym = tensor.cast(
+        tensor.alloc(0., minibatch_size, n_gaussians), theano.config.floatX)
+    steps = tensor.arange(conc_context.shape[0], dtype=theano.config.floatX)
 
+    def step(x_t, xm_t, h_tm1, w_tm1, k_tm1, c, cm, U, W_c, b_c, W_ch, b_ch, s):
+        proj_w = tensor.dot(w_tm1, W_ch) + b_ch
+        # multiply by .1 like Jose?
+        h_ti = tensor.tanh(x_t + tensor.dot(h_tm1, U) + proj_w)
         # Masking
         h_t = xm_t[:, None] * h_ti + (1. - xm_t[:, None]) * h_tm1
-        return (h_t, kappa_t, alpha_t, beta_t, phi_tx, mixture_t, window_t)
+
+        att_t = tensor.dot(h_t, W_c) + b_c
+        alpha_t = tensor.exp(_slice(att_t, 0))
+        beta_t = tensor.exp(_slice(att_t, 1))
+        kappa_t = k_tm1 + tensor.exp(
+            _slice(att_t, 2))
+
+        # batch_size x num_att_components x context_length
+        sq_tx = (kappa_t[:, :, None] - s[None, None, :]) ** 2
+        mixture_t = alpha_t[:, :, None] * tensor.exp(
+            -beta_t[:, :, None] * sq_tx)
+        # Sum over att_component weights
+        phi_tx = mixture_t.sum(axis=1)
+        # masking shouldn't matter - location based
+        # masked_c = (c * cm[:, :, None])
+        c = c.dimshuffle(1, 0, 2)
+        # Sum over characters in the context (u)
+        window_t = (phi_tx[:, :, None] * c).sum(axis=1)
+        return (h_t, window_t, kappa_t, alpha_t, beta_t, mixture_t, phi_tx)
 
     sequences = [projected_input, output_mask]
-    steps = tensor.arange(conc_context.shape[0], dtype=theano.config.floatX)
     non_sequences = [conc_context, context_mask,
                      U, W_window, b_window,
                      W_context_to_hidden, b_context_to_hidden,
                      steps]
-    initial_hidden_sym = tensor.cast(
-        tensor.alloc(0., minibatch_size, hidden_dim), theano.config.floatX)
-    initial_kappa_sym = tensor.cast(
-        tensor.alloc(0., minibatch_size, n_gaussians), theano.config.floatX)
-    outputs_info = [initial_hidden_sym, initial_kappa_sym,
-                    None, None, None, None, None]
+    outputs_info = [initial_hidden_sym, initial_window_sym,
+                    initial_kappa_sym,
+                    None, None, None, None]
 
     """
     rvals1 = step(projected_input[0], output_mask[0],
@@ -1295,16 +1305,15 @@ def location_attention_tanh_recurrent_layer(list_of_outputs,
     theano.printing.Print("h2")(h2.shape)
     """
 
-    # weird bad things when trying to do rvals, updates = ??
     rvals, updates = theano.scan(step, sequences=sequences,
                                  outputs_info=outputs_info,
                                  non_sequences=non_sequences)
-    (h, k, a, b, p, m, w) = rvals
-    return h
+    (h, w, k, a, b, m, p) = rvals
+    return h, (w, k, a, b, m, p)
 
 
 def gru_recurrent_layer(list_of_inputs, mask, hidden_dim, graph, name,
-                        random_state, strict=True):
+                        random_state, strict=True, scan_kwargs={}):
     ndim = [len(calc_expected_dims(graph, inp)) for inp in list_of_inputs]
     check = [n for n in ndim if n != 3]
     if len(check) > 0:
@@ -1367,7 +1376,8 @@ def gru_recurrent_layer(list_of_inputs, mask, hidden_dim, graph, name,
     h, updates = theano.scan(step, name=name + '_gru_recurrent_scan',
                              sequences=[projected_input, mask],
                              outputs_info=[h0_sym],
-                             non_sequences=[U])
+                             non_sequences=[U],
+                             **scan_kwargs)
     return h
 
 
@@ -1480,9 +1490,9 @@ def conditional_gru_recurrent_layer(list_of_outputs, list_of_hiddens,
 
 
 def content_attention_gru_recurrent_layer(list_of_outputs, list_of_hiddens,
-                                              output_mask, hidden_mask,
-                                              hidden_dim, graph,
-                                              name, random_state, strict=True):
+                                          output_mask, hidden_mask,
+                                          hidden_dim, graph,
+                                          name, random_state, strict=True):
     """
     Feed list_of_outputs as unshifted outputs desired. Internally the node
     will shift by one time step.
@@ -1640,11 +1650,14 @@ def content_attention_gru_recurrent_layer(list_of_outputs, list_of_hiddens,
     return h, context, attention_weights
 
 
-def location_attention_gru_recurrent_layer(list_of_outputs, list_of_hiddens,
-                                           output_mask, hidden_mask,
+def location_attention_gru_recurrent_layer(list_of_outputs,
+                                           list_of_contexts,
+                                           output_mask, context_mask,
                                            hidden_dim, graph,
-                                           name, random_state, strict=True):
-    raise ValueError("NYI")
+                                           name, random_state,
+                                           n_gaussians=5,
+                                           strict=True,
+                                           scan_kwargs={}):
     """
     Feed list_of_outputs as unshifted outputs desired. Internally the node
     will shift by one time step.
@@ -1652,6 +1665,179 @@ def location_attention_gru_recurrent_layer(list_of_outputs, list_of_hiddens,
     hidden_context is the hidden states from the encoder,
     in this case only useful to get the last hidden state.
     """
+    # an easy interface to conditional gru recurrent nets
+    # If the expressions are not the same length and batch size it won't work
+    max_ndim = max([out.ndim for out in list_of_outputs])
+    if max_ndim > 3:
+        raise ValueError("Input with ndim > 3 detected!")
+
+    conc_output = concatenate(list_of_outputs, graph,
+                              name + "_loc_att_gru_step",
+                              axis=list_of_outputs[0].ndim - 1)
+    conc_context = concatenate(list_of_contexts, graph,
+                               name + "_loc_att_gru_context",
+                               axis=list_of_contexts[0].ndim - 1)
+
+    init_context = conc_context.mean(axis=0)
+    shifted = conc_output[:-1]
+    # Decoder initializes hidden state with tanh projection of last hidden
+    # context representing p(X_1...X_t)
+    shp = calc_expected_dims(graph, conc_context)[-2:]
+    minibatch_size, conc_context_dim = shp
+    # shifted = tensor.zeros_like(conc_output)
+    # shifted = tensor.set_subtensor(shifted[1:], conc_output[:-1])
+    input_shifted = shifted
+    output_mask = output_mask[:-1]
+    conc_input_dim = calc_expected_dims(graph, input_shifted)[-1]
+
+    # tanh weights
+    W_name = name + '_loc_att_gru_rec_step_W'
+    b_name = name + '_loc_att_gru_rec_step_b'
+    Urz_name = name + '_loc_att_gru_rec_step_Urz'
+    U_name = name + '_loc_att_gru_rec_step_U'
+
+    W_context_to_hidden_name = name + '_loc_att_gru_rec_step_W_cth'
+    b_context_to_hidden_name = name + '_loc_att_gru_rec_step_b_cth'
+
+    # alpha, beta, kappa
+    W_window_name = name + '_loc_att_gru_window_W'
+    b_window_name = name + '_loc_att_gru_window_b'
+
+    list_of_names = [W_name, b_name, Urz_name, U_name,
+                     W_context_to_hidden_name, b_context_to_hidden_name,
+                     W_window_name, b_window_name]
+
+    if not names_in_graph(list_of_names, graph):
+        assert random_state is not None
+        shape = (conc_input_dim, hidden_dim)
+        np_W = np.hstack([np_uniform(shape, random_state),
+                          np_uniform(shape, random_state),
+                          np_uniform(shape, random_state)])
+        np_b = np_zeros((3 * shape[1],))
+        np_Urz = np.hstack([np_ortho((shape[1], shape[1]), random_state),
+                            np_ortho((shape[1], shape[1]), random_state), ])
+        np_U = np_ortho((shape[1], shape[1]), random_state)
+
+        np_W_context_to_hidden = np_tanh_fan_uniform(
+            (conc_context_dim, hidden_dim), random_state)
+        np_b_context_to_hidden = np_zeros((hidden_dim,))
+
+        # Init attention window weights - alpha, beta, kappa
+        np_W_window = np_tanh_fan_uniform(
+            (hidden_dim, 3 * n_gaussians), random_state)
+        np_b_window = np_zeros((3 * n_gaussians,))
+        list_of_arrays = [np_W, np_b, np_Urz, np_U,
+                          np_W_context_to_hidden, np_b_context_to_hidden,
+                          np_W_window, np_b_window]
+        add_arrays_to_graph(list_of_arrays, list_of_names, graph, strict=strict)
+    else:
+        if strict:
+            raise AttributeError(
+                "Name %s already found in graph with strict mode!" % name)
+
+    (W, b, Urz, U,
+     W_context_to_hidden, b_context_to_hidden,
+     W_window, b_window,) = fetch_from_graph(list_of_names, graph)
+    projected_input = tensor.dot(input_shifted, W) + b
+
+    def _gslice(arr, n):
+        # First slice is tensor_dim - 1 sometimes with scan...
+        # need to be *very* careful and test with strict=False and reusing stuff
+        # since shape is redefined in if not names_in_graph...
+        dim = n_gaussians
+        if arr.ndim == 3:
+            return arr[:, :, n * dim:(n + 1) * dim]
+        return arr[:, n * dim:(n + 1) * dim]
+
+    def _slice(arr, n):
+        # First slice is tensor_dim - 1 sometimes with scan...
+        # need to be *very* careful and test with strict=False and reusing stuff
+        # since shape is redefined in if not names_in_graph...
+        dim = shape[1]
+        if arr.ndim == 3:
+            return arr[:, :, n * dim:(n + 1) * dim]
+        return arr[:, n * dim:(n + 1) * dim]
+
+    h0_sym = tanh_layer([init_context], graph, name + '_h0_proj',
+                        proj_dim=hidden_dim, random_state=random_state)
+    initial_hidden_sym = h0_sym
+    # tensor.cast(tensor.alloc(0., minibatch_size, hidden_dim), theano.config.floatX)
+    initial_window_sym = tensor.cast(
+        tensor.alloc(0., minibatch_size, conc_context_dim),
+        theano.config.floatX)
+    initial_kappa_sym = tensor.cast(
+        tensor.alloc(0., minibatch_size, n_gaussians), theano.config.floatX)
+    steps = tensor.arange(conc_context.shape[0], dtype=theano.config.floatX)
+
+    def step(x_t, xm_t, h_tm1, w_tm1, k_tm1, c, cm,
+             Urz, U, W_c, b_c, W_ch, b_ch, s):
+        proj_w = tensor.dot(w_tm1, W_ch) + b_ch
+        projected_gates = tensor.dot(h_tm1, Urz)
+        r = tensor.nnet.sigmoid(_slice(x_t, 0) + _slice(projected_gates, 0))
+        z = tensor.nnet.sigmoid(_slice(x_t, 1) + _slice(projected_gates, 1))
+        candidate_h_t = tensor.tanh(
+            _slice(x_t, 2) + tensor.dot(r * h_tm1, U) + proj_w)
+        h_ti = z * h_tm1 + (1. - z) * candidate_h_t
+        h_t = xm_t[:, None] * h_ti + (1 - xm_t)[:, None] * h_tm1
+
+        att_t = tensor.dot(h_t, W_c) + b_c
+        alpha_t = tensor.exp(_gslice(att_t, 0))
+        beta_t = tensor.exp(_gslice(att_t, 1))
+        kappa_t = k_tm1 + tensor.exp(
+            _gslice(att_t, 2))
+
+        # batch_size x num_att_components x context_length
+        sq_tx = (kappa_t[:, :, None] - s[None, None, :]) ** 2
+        mixture_t = alpha_t[:, :, None] * tensor.exp(
+            -beta_t[:, :, None] * sq_tx)
+        # Sum over att_component weights
+        phi_tx = mixture_t.sum(axis=1)
+        # masking shouldn't matter - location based
+        # masked_c = (c * cm[:, :, None])
+        c = c.dimshuffle(1, 0, 2)
+        # Sum over characters in the context (u)
+        window_t = (phi_tx[:, :, None] * c).sum(axis=1)
+        return (h_t, window_t, kappa_t, alpha_t, beta_t, mixture_t, phi_tx)
+
+    sequences = [projected_input, output_mask]
+    non_sequences = [conc_context, context_mask,
+                     Urz, U, W_window, b_window,
+                     W_context_to_hidden, b_context_to_hidden,
+                     steps]
+    outputs_info = [initial_hidden_sym, initial_window_sym,
+                    initial_kappa_sym,
+                    None, None, None, None]
+
+    """
+    rvals1 = step(projected_input[0], output_mask[0],
+                 initial_hidden_sym, initial_kappa_sym,
+                 conc_context, context_mask,
+                 U, W_window, b_window,
+                 W_context_to_hidden, b_context_to_hidden, steps)
+    h1, k1, a1, b1, p1, m1, w1 = rvals1
+    rvals2 = step(projected_input[1], output_mask[1],
+                 h1, k1,
+                 conc_context, context_mask,
+                 U, W_window, b_window,
+                 W_context_to_hidden, b_context_to_hidden, steps)
+    h2, k2, a2, b2, p2, m2, w2 = rvals2
+    theano.printing.Print("h2")(h2.shape)
+    """
+
+    rvals, updates = theano.scan(step, sequences=sequences,
+                                 outputs_info=outputs_info,
+                                 non_sequences=non_sequences,
+                                 **scan_kwargs)
+    (h, w, k, a, b, m, p) = rvals
+    return h, (w, k, a, b, m, p)
+
+
+"""
+def location_attention_gru_recurrent_layer(list_of_outputs, list_of_hiddens,
+                                           output_mask, hidden_mask,
+                                           hidden_dim, graph,
+                                           name, random_state, strict=True):
+    raise ValueError("NYI")
     # an easy interface to conditional gru recurrent nets
     # If the expressions are not the same length and batch size it won't work
     max_ndim = max([out.ndim for out in list_of_outputs])
@@ -1788,11 +1974,9 @@ def location_attention_gru_recurrent_layer(list_of_outputs, list_of_hiddens,
         h_t = m_t[:, None] * h_ti + (1 - m_t)[:, None] * h_tm1
         return h_t, ctx_t, att_w_t.T
 
-    """
     # Single step call
     s0 = [s[0] for s in sequences]
     outs_t = step(*(s0 + outputs + non_sequences))
-    """
 
     (h, context, attention_weights), updates = theano.scan(
         step, name=name + '_loc_att_gru_recurrent_scan',
@@ -1800,6 +1984,7 @@ def location_attention_gru_recurrent_layer(list_of_outputs, list_of_hiddens,
         outputs_info=outputs,
         non_sequences=non_sequences)
     return h, context, attention_weights
+"""
 
 
 def lstm_recurrent_layer(list_of_inputs, mask, hidden_dim, graph, name,

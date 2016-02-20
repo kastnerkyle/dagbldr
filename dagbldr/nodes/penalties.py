@@ -334,7 +334,7 @@ def bernoulli_and_correlated_gaussian_mixture_cost(
     Bernoulli combined with correlated gaussian mixture model negative log
     likelihood compared to true_values.
 
-    Based on implementation from Junyoung Chung.
+    Based on implementation from Jose Sotelo.
 
     Parameters
     ----------
@@ -344,8 +344,8 @@ def bernoulli_and_correlated_gaussian_mixture_cost(
     mu_values : tensor, shape
         The predicted values out of some layer, normally a linear layer
 
-    log_sigma_values : tensor, shape
-        The predicted values out of some layer, normally a linear layer
+    sigma_values : tensor, shape
+        The predicted values out of some layer, normally a softplus layer
 
     true_values : tensor, shape[:-1]
         Ground truth values. Must be the same shape as mu_values.shape[:-1].
@@ -386,6 +386,30 @@ def bernoulli_and_correlated_gaussian_mixture_cost(
     true_1 = _subslice(true_values, 1)
     true_2 = _subslice(true_values, 2)
 
+
+    """
+    # corr = _subslice(corr_values, 0) # Should just make it 1D
+    # tf_2d_normal in Jose's code
+    norm_1 = true_1 - mu_1
+    norm_2 = true_2 - mu_2
+
+    s1s2 = sigma_1 * sigma_2
+    z = (norm_1 / sigma_1) ** 2 + (norm_2 / sigma_2) ** 2 - 2 * (
+        (corr * norm_1 * norm_2) / s1s2)
+    neg_corr = 1 - corr ** 2
+    num = -tensor.exp(z / (2 * neg_corr))
+    denom = 2 * np.pi * s1s2 * tensor.sqrt(neg_corr)
+    normal = num / denom
+
+    r1 = (normal * coeff_values).sum(axis=normal.ndim-1)
+    r1 = -tensor.log(tensor.maximum(r1, 1E-20))
+
+    r2 = true_0 * binary_values + (1 - true_0) * (1 - binary_values)
+    r2 = -tensor.log(r2).sum(axis=r2.ndim-1) # sum to remove the empty axis
+    nll = r1 + r2
+    """
+
+    # Stabler version which doesn't appear to work on TTH
     c_b = tensor.sum(tensor.xlogx.xlogy0(
         true_0, binary_values) + tensor.xlogx.xlogy0(
             1 - true_0, 1 - binary_values), axis=binary_values.ndim - 1)
