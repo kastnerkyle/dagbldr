@@ -558,7 +558,7 @@ def archive_dagbldr():
         command_string += get_script() + ".py "
         command_string += " ".join(sys.argv[1:])
     except KeyError:
-        command_string += get_script() + ".py "
+        command_string = get_script() + ".py "
         command_string += " ".join(sys.argv[1:])
     command_script_path = code_snapshot_dir + os.path.sep + "run.sh"
     if not os.path.exists(command_script_path):

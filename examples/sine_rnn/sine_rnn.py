@@ -54,7 +54,7 @@ X_fork = simple_fork([X_sym], [n_in], n_hid, name="h1",
 
 
 def step(in_t, h_tm1):
-    h_t = simple(in_t, h_tm1, n_hid, name="rec", random_state=random_state)
+    h_t = simple(in_t, h_tm1, [n_hid], n_hid, name="rec", random_state=random_state)
     return h_t
 
 h, _ = theano.scan(step,

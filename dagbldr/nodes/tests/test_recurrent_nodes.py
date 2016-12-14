@@ -6,6 +6,8 @@ from dagbldr.nodes import simple
 from dagbldr.nodes import simple_fork
 from dagbldr.nodes import lstm
 from dagbldr.nodes import lstm_fork
+from dagbldr.nodes import gru
+from dagbldr.nodes import gru_fork
 from dagbldr.nodes import slice_state
 from dagbldr.nodes import linear
 from dagbldr.optimizers import sgd
@@ -40,7 +42,7 @@ X_sym = tensor.tensor3()
 y_sym = tensor.tensor3()
 
 
-def run_simple():
+def test_simple():
     del_shared()
     n_in = X.shape[-1]
     n_hid = 20
@@ -55,7 +57,7 @@ def run_simple():
                      random_state=random_state)
 
     def step(in_t, h_tm1):
-        h_t = simple(in_t, h_tm1, n_hid, name="rec", random_state=random_state)
+        h_t = simple(in_t, h_tm1, [n_hid], n_hid, name="rec", random_state=random_state)
         return h_t
 
     h, _ = theano.scan(step, sequences=[l1], outputs_info=[h0])
@@ -74,7 +76,7 @@ def run_simple():
     f(X, y, h_init)
 
 
-def run_lstm():
+def test_lstm():
     del_shared()
     n_in = X.shape[-1]
     n_hid = 20
@@ -89,13 +91,47 @@ def run_lstm():
                     random_state=random_state)
 
     def step(in_t, h_tm1):
-        h_t = lstm(in_t, h_tm1, n_hid, name="rec", random_state=random_state)
+        h_t = lstm(in_t, h_tm1, [n_hid], n_hid, name="rec", random_state=random_state)
         return h_t
 
     h, _ = theano.scan(step, sequences=[l1], outputs_info=[h0])
     h_o = slice_state(h, n_hid)
 
     pred = linear([h_o], [n_hid], n_out, name="l2", random_state=random_state)
+    cost = ((y_sym - pred) ** 2).sum()
+    params = list(get_params().values())
+
+    grads = tensor.grad(cost, params)
+    learning_rate = 0.000000000001
+    opt = sgd(params, learning_rate)
+    updates = opt.updates(params, grads)
+
+    f = theano.function([X_sym, y_sym, h0], [cost, h], updates=updates,
+                        mode="FAST_COMPILE")
+    f(X, y, h_init)
+
+
+def test_gru():
+    del_shared()
+    n_in = X.shape[-1]
+    n_hid = 20
+    n_out = y.shape[-1]
+
+    random_state = np.random.RandomState(42)
+    h_init = np.zeros((minibatch_size, n_hid)).astype("float32")
+
+    h0 = tensor.fmatrix()
+
+    l1 = gru_fork([X_sym], [n_in], n_hid, name="l1",
+                    random_state=random_state)
+
+    def step(in_t, h_tm1):
+        h_t = gru(in_t, h_tm1, [n_hid], n_hid, name="rec", random_state=random_state)
+        return h_t
+
+    h, _ = theano.scan(step, sequences=[l1], outputs_info=[h0])
+
+    pred = linear([h], [n_hid], n_out, name="l2", random_state=random_state)
     cost = ((y_sym - pred) ** 2).sum()
     params = list(get_params().values())
 

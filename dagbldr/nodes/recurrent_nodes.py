@@ -8,6 +8,7 @@ from ..utils import concatenate, as_shared
 from ..core import get_logger, get_type, set_shared
 from .nodes import projection
 from .nodes import np_tanh_fan_uniform
+from .nodes import np_tanh_fan_normal
 from .nodes import np_variance_scaled_uniform
 from .nodes import np_normal
 from .nodes import np_zeros
@@ -34,7 +35,7 @@ def simple_fork(list_of_inputs, list_of_input_dims, proj_dim, name=None,
     return ret
 
 
-def simple(step_input, previous_hidden, hidden_dim, mask=None,
+def simple(step_input, previous_hidden, list_of_input_dims, hidden_dim, mask=None,
            name=None, random_state=None, strict=True, init_func=np_ortho):
     """
     hidden_dim 1x
@@ -57,44 +58,6 @@ def simple(step_input, previous_hidden, hidden_dim, mask=None,
         W = as_shared(np_W)
         set_shared(W_name, W)
     return tensor.tanh(step_input + tensor.dot(previous_hidden, W))
-
-
-def gru_weights(input_dim, hidden_dim, forward_init=None, hidden_init="normal",
-                random_state=None):
-    if random_state is None:
-        raise ValueError("Must pass random_state!")
-    shape = (input_dim, hidden_dim)
-    if forward_init == "normal":
-        W = np.hstack([np_normal(shape, random_state),
-                       np_normal(shape, random_state),
-                       np_normal(shape, random_state)])
-    elif forward_init == "fan":
-        W = np.hstack([np_tanh_fan_normal(shape, random_state),
-                       np_tanh_fan_normal(shape, random_state),
-                       np_tanh_fan_normal(shape, random_state)])
-    elif forward_init is None:
-        if input_dim == hidden_dim:
-            W = np.hstack([np_ortho(shape, random_state),
-                           np_ortho(shape, random_state),
-                           np_ortho(shape, random_state)])
-        else:
-            # lecun
-            W = np.hstack([np_variance_scaled_uniform(shape, random_state),
-                           np_variance_scaled_uniform(shape, random_state),
-                           np_variance_scaled_uniform(shape, random_state)])
-    else:
-        raise ValueError("Unknown forward init type %s" % forward_init)
-    b = np_zeros((3 * shape[1],))
-
-    if hidden_init == "normal":
-        Wur = np.hstack([np_normal((shape[1], shape[1]), random_state),
-                         np_normal((shape[1], shape[1]), random_state), ])
-        U = np_normal((shape[1], shape[1]), random_state)
-    elif hidden_init == "ortho":
-        Wur = np.hstack([np_ortho((shape[1], shape[1]), random_state),
-                         np_ortho((shape[1], shape[1]), random_state), ])
-        U = np_ortho((shape[1], shape[1]), random_state)
-    return W, b, Wur, U
 
 
 def lstm_weights(input_dim, hidden_dim, forward_init=None, hidden_init="normal",
@@ -213,68 +176,88 @@ def slice_state(arr, hidden_dim):
         raise ValueError("Unknown dim")
 
 
-'''
-TODO:
-def GRU(inp, gate_inp, previous_state, input_dim, hidden_dim, random_state,
-        mask=None, name=None, init=None, scale="default", weight_norm=None,
-        biases=False):
-        if name is not None:
-            raise ValueError("Unhandled parameter sharing in GRU")
-        if init is None:
-            hidden_init = "ortho"
-        elif init == "normal":
-            hidden_init = "normal"
+def gru_weights(input_dim, hidden_dim, forward_init=None, hidden_init="ortho",
+                random_state=None):
+    if random_state is None:
+        raise ValueError("Must pass random_state!")
+    shape = (input_dim, hidden_dim)
+    if forward_init == "normal":
+        W = np.hstack([np_normal(shape, random_state),
+                       np_normal(shape, random_state),
+                       np_normal(shape, random_state)])
+    elif forward_init == "fan":
+        W = np.hstack([np_tanh_fan_normal(shape, random_state),
+                       np_tanh_fan_normal(shape, random_state),
+                       np_tanh_fan_normal(shape, random_state)])
+    elif forward_init is None:
+        if input_dim == hidden_dim:
+            W = np.hstack([np_ortho(shape, random_state),
+                           np_ortho(shape, random_state),
+                           np_ortho(shape, random_state)])
         else:
-            raise ValueError("Not yet configured for other inits")
+            # lecun
+            W = np.hstack([np_variance_scaled_uniform(shape, random_state),
+                           np_variance_scaled_uniform(shape, random_state),
+                           np_variance_scaled_uniform(shape, random_state)])
+    else:
+        raise ValueError("Unknown forward init type %s" % forward_init)
+    b = np_zeros((3 * shape[1],))
 
-        ndi = ndim(inp)
-        if mask is None:
-            if ndi == 2:
-                mask = tf.ones_like(inp)
-            else:
-                raise ValueError("Unhandled ndim")
-
-        ndm = ndim(mask)
-        if ndm == (ndi - 1):
-            mask = tf.expand_dims(mask, ndm - 1)
-
-        _, _, Wur, U = gru_weights(input_dim, hidden_dim,
-                                   hidden_init=hidden_init,
-                                   random_state=random_state)
-        dim = hidden_dim
-        f1 = Linear([previous_state], [2 * hidden_dim], 2 * hidden_dim,
-                    random_state, name=(name, "update/reset"), init=[Wur],
-                    biases=biases, weight_norm=weight_norm)
-        gates = sigmoid(f1 + gate_inp)
-        update = gates[:, :dim]
-        reset = gates[:, dim:]
-        state_reset = previous_state * reset
-        f2 = Linear([state_reset], [hidden_dim], hidden_dim,
-                    random_state, name=(name, "state"), init=[U], biases=biases,
-                    weight_norm=weight_norm)
-        next_state = tf.tanh(f2 + inp)
-        next_state = next_state * update + previous_state * (1. - update)
-        next_state = mask * next_state + (1. - mask) * previous_state
-        return next_state
+    if hidden_init == "normal":
+        U = np.hstack([np_normal((shape[1], shape[1]), random_state),
+                         np_normal((shape[1], shape[1]), random_state),
+                         np_normal((shape[1], shape[1]), random_state), ])
+    elif hidden_init == "ortho":
+        U = np.hstack([np_ortho((shape[1], shape[1]), random_state),
+                       np_ortho((shape[1], shape[1]), random_state),
+                       np_ortho((shape[1], shape[1]), random_state), ])
+    return W, b, U
 
 
-def GRUFork(list_of_inputs, input_dims, output_dim, random_state, name=None,
-            init=None, scale="default", weight_norm=None, biases=True):
-        if name is not None:
-            raise ValueError("Unhandled parameter sharing in GRUFork")
-        gates = Linear(list_of_inputs, input_dims, 3 * output_dim,
-                       random_state=random_state,
-                       name=(name, "gates"), init=init, scale=scale,
-                       weight_norm=weight_norm, biases=biases)
-        dim = output_dim
-        nd = ndim(gates)
-        if nd == 2:
-            d = gates[:, :dim]
-            g = gates[:, dim:]
-        elif nd == 3:
-            d = gates[:, :, :dim]
-            g = gates[:, :, dim:]
-        else:
-            raise ValueError("Unsupported ndim")
-        return d, g
-'''
+def gru_fork(list_of_inputs, list_of_input_dims, proj_dim, name=None,
+             batch_normalize=False, mode_switch=None,
+             random_state=None, strict=True, init_func=np_tanh_fan_uniform):
+    if name is None:
+        name = get_name()
+    else:
+        name = name + "_gru_fork"
+    inp_d = np.sum(list_of_input_dims)
+    W, b, U = gru_weights(inp_d, proj_dim, random_state=random_state)
+
+    ret = projection(
+        list_of_inputs=list_of_inputs, list_of_input_dims=list_of_input_dims,
+        proj_dim=proj_dim, name=name, batch_normalize=batch_normalize,
+        mode_switch=mode_switch, random_state=random_state,
+        init_weights=W, init_biases=b,
+        strict=strict, init_func=init_func, act_func=linear_activation)
+    return ret
+
+
+def gru(step_input, previous_state, list_of_input_dims, hidden_dim,
+        name=None, random_state=None, strict=True, init_func=np_ortho):
+    if name is None:
+        name = get_name()
+    U_name = name + "_gru_recurrent_U"
+    input_dim = np.sum(list_of_input_dims)
+    _, _, np_U = gru_weights(input_dim, hidden_dim, random_state=random_state)
+    U_full = as_shared(np_U)
+    set_shared(U_name, U_full)
+
+    dim = hidden_dim
+    def _s(p, d):
+        return p[:, d * dim:(d+1) * dim]
+
+    Wur = U_full[:, dim:]
+    gate_inp = step_input[:, dim:]
+
+    U = _s(U_full, 0)
+    state_inp = _s(step_input, 0)
+
+    gates = tensor.nnet.sigmoid(tensor.dot(previous_state, Wur) + gate_inp)
+    update = gates[:, :dim]
+    reset = gates[:, dim:]
+
+    p = tensor.dot(state_inp * reset, U)
+    next_state = tensor.tanh(p + state_inp)
+    next_state = (next_state * update) + (previous_state * (1. - update))
+    return next_state
