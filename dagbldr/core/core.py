@@ -235,6 +235,7 @@ def _special_check():
 
 # decided at import, should be consistent over training
 checkpoint_uuid = get_name()[:6]
+checkpoint_import_time = time.strftime("%H-%M-%S_%Y-%d-%m", time.gmtime())
 def get_checkpoint_dir(checkpoint_dir=None, folder=None, create_dir=True):
     """ Get checkpoint directory path """
     if checkpoint_dir is None:
@@ -245,10 +246,9 @@ def get_checkpoint_dir(checkpoint_dir=None, folder=None, create_dir=True):
         if _special_check():
             checkpoint_dir = "/Tmp/kastner/dagbldr_models"
 
-
     if folder is None:
         checkpoint_name = get_script()
-        tmp = checkpoint_dir + os.path.sep + checkpoint_name + "_" + checkpoint_uuid
+        tmp = checkpoint_dir + os.path.sep + checkpoint_name + "_" + checkpoint_uuid + "_" + checkpoint_import_time
         checkpoint_dir = tmp
     else:
         checkpoint_dir = os.path.join(checkpoint_dir, folder)
@@ -1547,7 +1547,9 @@ def run_loop(train_loop_function, train_itr,
 
     # save current state of lib and calling script
     archive_dagbldr()
-
+    script = get_script()
+    hostname = socket.gethostname()
+    logger.info("Host %s, script %s" % (hostname, script))
     logger.info("Model parameter summary")
     logger.info("-----------------------")
     total = 0
@@ -1576,6 +1578,7 @@ def run_loop(train_loop_function, train_itr,
     # This will get sliced down to the correct number of minibatches down below
     train_costs = [0.] * 1000000
     valid_costs = [0.] * 1000000
+    overall_start = time.time()
     try:
         for e in range(start_epoch, start_epoch + n_epochs):
             logger.info(" ")
@@ -1592,6 +1595,7 @@ def run_loop(train_loop_function, train_itr,
                 # train loop
                 train_start = time.time()
                 last_time_checkpoint = train_start
+                status_line_count = 0
                 while True:
                     if train_mb_count < skip_n_train_minibatches:
                         train_mb_count += 1
@@ -1604,7 +1608,19 @@ def run_loop(train_loop_function, train_itr,
                         raise StopIteration("NaN detected in train")
 
                     train_mb_count += 1
+
+                    # hardcoded 15 s status update
+                    if (time.time() - last_time_checkpoint) >= 15:
+                        if status_line_count < 40:
+                            print(".", end="")
+                        else:
+                            status_line_count = 0
+                            print("")
+                            print(".", end="")
+                        status_line_count += 1
+
                     if (train_mb_count % checkpoint_every_n_updates) == 0:
+                        print("")
                         checkpoint_save_path = "%s_model_update_checkpoint_%i.pkl" % (ident, train_mb_count)
                         weights_save_path = "%s_model_update_weights_%i.npz" % (ident, train_mb_count)
                         results_save_path = "%s_model_update_results_%i.html" % (ident, train_mb_count)
@@ -1633,7 +1649,9 @@ def run_loop(train_loop_function, train_itr,
                             object_save_path = "%s_model_update_object_%i.pkl" % (ident, train_mb_count)
                             save_checkpoint(object_save_path, stateful_object)
                     elif (time.time() - last_time_checkpoint) >= checkpoint_every_n_seconds:
-                        time_diff = time.time() - train_start
+                        print("")
+                        # Time since training started
+                        time_diff = time.time() - overall_start
                         last_time_checkpoint = time.time()
                         checkpoint_save_path = "%s_model_time_checkpoint_%i.pkl" % (ident, int(time_diff))
                         weights_save_path = "%s_model_time_weights_%i.npz" % (ident, int(time_diff))
@@ -1664,6 +1682,7 @@ def run_loop(train_loop_function, train_itr,
                             save_checkpoint(object_save_path, stateful_object)
                     draw = random_state.rand()
                     if draw < monitor_prob and not skip_intermediates:
+                        print("")
                         logger.info("Starting train mb %i" % train_mb_count)
                         logger.info("Current mean cost %f" % np.mean(partial_train_costs))
                         results_save_path = "%s_intermediate_results.html" % ident
@@ -1680,6 +1699,7 @@ def run_loop(train_loop_function, train_itr,
                 # of minibatches in an epoch!
                 train_stop = time.time()
                 train_costs = train_costs[:train_mb_count]
+                print("")
                 logger.info("Starting validation, epoch %i" % e_i)
                 valid_start = time.time()
                 try:
@@ -1707,6 +1727,7 @@ def run_loop(train_loop_function, train_itr,
                                      None))
                 except StopIteration:
                     pass
+                print("")
                 valid_stop = time.time()
                 epoch_stop = time.time()
                 valid_costs = valid_costs[:valid_mb_count]
@@ -1777,9 +1798,6 @@ def run_loop(train_loop_function, train_itr,
                 checkpoint_dict["train_checkpoint_auto"] = overall_train_checkpoint
                 checkpoint_dict["valid_checkpoint_auto"] = overall_valid_checkpoint
 
-
-                script = get_script()
-                hostname = socket.gethostname()
                 logger.info("Host %s, script %s" % (hostname, script))
                 logger.info("Epoch %i complete" % e_i)
                 logger.info("Epoch mean train cost %f" % mean_epoch_train_cost)

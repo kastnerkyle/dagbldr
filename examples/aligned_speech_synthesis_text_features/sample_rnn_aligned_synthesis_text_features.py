@@ -1,48 +1,92 @@
 #!/usr/bin/env python
-from extras import masked_synthesis_sequence_iterator, pe
+from extras import masked_synthesis_sequence_iterator, pe, generate_merlin_wav
 import os
-
 import numpy as np
-import theano
-from theano import tensor
+#import theano
 
-from dagbldr.nodes import linear
-from dagbldr.nodes import gru
-from dagbldr.nodes import gru_fork
-from dagbldr.nodes import masked_cost
-
-from dagbldr import get_params
-from dagbldr.utils import create_checkpoint_dict
-
-from dagbldr.optimizers import adam
-from dagbldr.training import TrainingLoop
-
-
-filedir = "/Tmp/kastner/vctk_American_speakers/numpy_features/"
-#if not os.path.exists(filedir):
-if filedir[-1] != "/":
-    fd = filedir + "/"
-else:
-    fd = filedir
-if not os.path.exists(fd):
+filedir = "/Tmp/kastner/vctk_American_speakers/norm_info/"
+if not os.path.exists(filedir):
+    if filedir[-1] != "/":
+        fd = filedir + "/"
+    else:
+        fd = filedir
     os.makedirs(fd)
-nfsdir = "/data/lisatmp4/kastner/vctk_American_speakers/numpy_features/"
-cmd = "rsync -avhp %s %s" % (nfsdir, fd)
-pe(cmd, shell=True)
+    nfsdir = "/data/lisatmp4/kastner/vctk_American_speakers/norm_info/"
+    cmd = "rsync -avhp %s %s" % (nfsdir, fd)
+    pe(cmd, shell=True)
 
-files = [filedir + fs for fs in os.listdir(filedir)]
-truncation = 50
+numpy_filedir = "/Tmp/kastner/vctk_American_speakers/numpy_features/"
+files = [numpy_filedir + fs for fs in os.listdir(numpy_filedir)]
 minibatch_size = 8
-n_hid = 1024
-train_itr = masked_synthesis_sequence_iterator(files, minibatch_size, truncation,
+
+train_itr = masked_synthesis_sequence_iterator(files, minibatch_size,
                                                stop_index=.9)
 
-valid_itr = masked_synthesis_sequence_iterator(files, minibatch_size, truncation,
+valid_itr = masked_synthesis_sequence_iterator(files, minibatch_size,
                                                start_index=.9)
-#X_mb, y_mb = next(train_itr)
-X_mb, y_mb, X_mb_mask, y_mb_mask = next(train_itr)
+
+"""
+for i in range(50):
+    X_mb, y_mb, X_mb_mask, y_mb_mask = next(train_itr)
 train_itr.reset()
 
+generate_merlin_wav(y_mb[:, 2, :], do_post_filtering=False)
+"""
+
+import argparse
+import cPickle as pickle
+parser = argparse.ArgumentParser(description="Sample audio from saved model")
+parser.add_argument("pkl_or_npz_file", help="Stored pkl file")
+args = parser.parse_args()
+filepath = args.pkl_or_npz_file
+ext = filepath.split(".")[-1]
+
+if ext == "pkl":
+    print("Found checkpoint pkl file, doing sampling")
+    pickle_path = filepath
+    with open(pickle_path) as f:
+        checkpoint_dict = pickle.load(f)
+
+    predict_function = checkpoint_dict["predict_function"]
+
+    # skip some of the shorter ones
+    for i in range(20):
+        X_mb, y_mb, X_mb_mask, y_mb_mask = next(train_itr)
+
+    n_hid = 1024
+    minibatch_size = 8
+    i_h1 = np.zeros((minibatch_size, n_hid)).astype("float32")
+    i_h2 = np.zeros((minibatch_size, n_hid)).astype("float32")
+    i_h3 = np.zeros((minibatch_size, n_hid)).astype("float32")
+
+    sample_length = len(X_mb)
+    res = np.zeros((sample_length, minibatch_size, y_mb.shape[-1])).astype("float32")
+    inmask = np.ones_like(res[:, :, 0])
+    for i in range(sample_length):
+        o, o_h1, o_h2, o_h3 = predict_function(X_mb[i][None], X_mb_mask[i][None],
+                                            i_h1, i_h2, i_h3)
+        res[i, :, :] = o[0]
+        i_h1, i_h2, i_h3 = (o_h1[-1], o_h2[-1], o_h3[-1])
+
+    # TODO: Figure out how to avoid this :(
+    out = {"audio_results": res}
+    savename = "sampled.npz"
+    np.savez_compressed(savename, **out)
+    print("Sampling complete, saved to %s" % savename)
+elif ext == "npz":
+    print("Found file path extension npz, reconstructing")
+    npz_path = filepath
+    d = np.load(npz_path)
+    r = d["audio_results"]
+    for i in range(r.shape[1]):
+        name = "mygen_%i" % i
+        generate_merlin_wav(r[:, i, :], file_basename=name,
+                            do_post_filtering=False)
+    print("Reconstruction complete")
+else:
+    print("Unrecognized extension, exiting")
+
+'''
 """
 from extras import generate_merlin_wav
 
@@ -166,3 +210,4 @@ TL = TrainingLoop(train_loop, train_itr,
                   checkpoint_dict=checkpoint_dict,
                   skip_minimums=True)
 epoch_results = TL.run()
+'''

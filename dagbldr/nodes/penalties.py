@@ -440,6 +440,13 @@ def masked_cost(cost, mask):
         The masked cost
 
     """
+    if mask.ndim < cost.ndim:
+        if mask.ndim == 2:
+            mask = mask[:, :, None]
+        elif mask.ndim == 1:
+            mask = mask[:, None]
+    elif mask.ndim != cost.ndim:
+        raise AttributeError("Cost and mask do not have compatible shape")
     return cost * mask
 
 

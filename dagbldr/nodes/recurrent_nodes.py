@@ -126,12 +126,15 @@ def lstm_fork(list_of_inputs, list_of_input_dims, proj_dim, name=None,
 
 
 def lstm(step_input, previous_state, list_of_input_dims, hidden_dim,
-         name=None, random_state=None, strict=True, init_func=np_ortho):
+         mask=None, name=None, random_state=None, strict=True, init_func=np_ortho):
     """
     hidden_dim is really 2x hidden_dim
     """
     if name is None:
         name = get_name()
+
+    if mask is not None:
+        raise ValueError("Mask support NYI for LSTM")
     U_name = name + "_lstm_recurrent_U"
     input_dim = np.sum(list_of_input_dims)
     _, _, np_U = lstm_weights(input_dim, hidden_dim, random_state=random_state)
@@ -234,9 +237,13 @@ def gru_fork(list_of_inputs, list_of_input_dims, proj_dim, name=None,
 
 
 def gru(step_input, previous_state, list_of_input_dims, hidden_dim,
-        name=None, random_state=None, strict=True, init_func=np_ortho):
+        mask=None, name=None, random_state=None, strict=True, init_func=np_ortho):
     if name is None:
         name = get_name()
+
+    if mask is None:
+        mask = tensor.alloc(1., step_input.shape[0], 1)
+
     U_name = name + "_gru_recurrent_U"
     input_dim = np.sum(list_of_input_dims)
     _, _, np_U = gru_weights(input_dim, hidden_dim, random_state=random_state)
@@ -260,4 +267,5 @@ def gru(step_input, previous_state, list_of_input_dims, hidden_dim,
     p = tensor.dot(state_inp * reset, U)
     next_state = tensor.tanh(p + state_inp)
     next_state = (next_state * update) + (previous_state * (1. - update))
+    next_state = mask[:, None] * next_state + (1. - mask[:, None]) * previous_state
     return next_state

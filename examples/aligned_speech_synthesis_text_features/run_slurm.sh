@@ -1,1 +1,1 @@
-THEANO_FLAGS="floatX=float32,device=gpu" sbatch --gres=gpu:titanblack --qos=high --mem=8000 rnn_aligned_synthesis_text_features.py
+PYTHONUNBUFFERED=1 THEANO_FLAGS="floatX=float32,device=gpu,force_device=True,lib.cnmem=1" sbatch --gres=gpu:titanxp --qos=unkillable --mem=11000 $1
