@@ -208,8 +208,8 @@ def gru_weights(input_dim, hidden_dim, forward_init=None, hidden_init="ortho",
 
     if hidden_init == "normal":
         U = np.hstack([np_normal((shape[1], shape[1]), random_state),
-                         np_normal((shape[1], shape[1]), random_state),
-                         np_normal((shape[1], shape[1]), random_state), ])
+                       np_normal((shape[1], shape[1]), random_state),
+                       np_normal((shape[1], shape[1]), random_state), ])
     elif hidden_init == "ortho":
         U = np.hstack([np_ortho((shape[1], shape[1]), random_state),
                        np_ortho((shape[1], shape[1]), random_state),
@@ -219,13 +219,21 @@ def gru_weights(input_dim, hidden_dim, forward_init=None, hidden_init="ortho",
 
 def gru_fork(list_of_inputs, list_of_input_dims, proj_dim, name=None,
              batch_normalize=False, mode_switch=None,
-             random_state=None, strict=True, init_func=np_tanh_fan_uniform):
+             random_state=None, strict=True, init_func="default"):
     if name is None:
         name = get_name()
     else:
         name = name + "_gru_fork"
+
+    if init_func == "default":
+        forward_init = None
+        hidden_init = "ortho"
+    elif init_func == "normal":
+        forward_init = "normal"
+        hidden_init = "normal"
     inp_d = np.sum(list_of_input_dims)
-    W, b, U = gru_weights(inp_d, proj_dim, random_state=random_state)
+    W, b, U = gru_weights(inp_d, proj_dim, random_state=random_state,
+                          forward_init=forward_init, hidden_init=hidden_init)
 
     ret = projection(
         list_of_inputs=list_of_inputs, list_of_input_dims=list_of_input_dims,
@@ -237,7 +245,7 @@ def gru_fork(list_of_inputs, list_of_input_dims, proj_dim, name=None,
 
 
 def gru(step_input, previous_state, list_of_input_dims, hidden_dim,
-        mask=None, name=None, random_state=None, strict=True, init_func=np_ortho):
+        mask=None, name=None, random_state=None, strict=True, init_func="default"):
     if name is None:
         name = get_name()
 
@@ -246,7 +254,16 @@ def gru(step_input, previous_state, list_of_input_dims, hidden_dim,
 
     U_name = name + "_gru_recurrent_U"
     input_dim = np.sum(list_of_input_dims)
-    _, _, np_U = gru_weights(input_dim, hidden_dim, random_state=random_state)
+    if init_func == "default":
+        forward_init = None
+        hidden_init = "ortho"
+    elif init_func == "normal":
+        forward_init = "normal"
+        hidden_init = "normal"
+    else:
+        raise ValueError("Unknown init_func for gru: %s" % init_func)
+    _, _, np_U = gru_weights(input_dim, hidden_dim, random_state=random_state,
+                             forward_init=forward_init, hidden_init=hidden_init)
     U_full = as_shared(np_U)
     set_shared(U_name, U_full)
 

@@ -226,8 +226,8 @@ def convert_to_one_hot(itr, n_classes, dtype="int32"):
 def _special_check():
     ip_addr = socket.gethostbyname(socket.gethostname())
     subnet = ".".join(ip_addr.split(".")[:-1])
-    if subnet == "132.204.25":
-        logger.info("Found special runtime environment")
+    if subnet == "132.204.25" or subnet == "132.204.26":
+        logger.info("Found special runtime environment, saving to /Tmp")
         return True
     else:
         return False

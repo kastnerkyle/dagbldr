@@ -15,8 +15,19 @@ from dagbldr import get_params
 from dagbldr.utils import create_checkpoint_dict
 
 from dagbldr.optimizers import adam
+from dagbldr.optimizers import gradient_norm_rescaling
 from dagbldr.training import TrainingLoop
 
+filedir = "/Tmp/kastner/vctk_American_speakers/norm_info/"
+if not os.path.exists(filedir):
+    if filedir[-1] != "/":
+        fd = filedir + "/"
+    else:
+        fd = filedir
+    os.makedirs(fd)
+    nfsdir = "/data/lisatmp4/kastner/vctk_American_speakers/norm_info/"
+    cmd = "rsync -avhp %s %s" % (nfsdir, fd)
+    pe(cmd, shell=True)
 
 filedir = "/Tmp/kastner/vctk_American_speakers/numpy_features/"
 #if not os.path.exists(filedir):
@@ -31,13 +42,12 @@ cmd = "rsync -avhp %s %s" % (nfsdir, fd)
 pe(cmd, shell=True)
 
 files = [filedir + fs for fs in os.listdir(filedir)]
-truncation = 50
 minibatch_size = 8
 n_hid = 1024
-train_itr = masked_synthesis_sequence_iterator(files, minibatch_size, truncation,
+train_itr = masked_synthesis_sequence_iterator(files, minibatch_size,
                                                stop_index=.9)
 
-valid_itr = masked_synthesis_sequence_iterator(files, minibatch_size, truncation,
+valid_itr = masked_synthesis_sequence_iterator(files, minibatch_size,
                                                start_index=.9)
 #X_mb, y_mb = next(train_itr)
 X_mb, y_mb, X_mb_mask, y_mb_mask = next(train_itr)
@@ -87,25 +97,27 @@ h3_0.tag.test_value = train_h3_init
 
 random_state = np.random.RandomState(1999)
 
+init = "normal"
+
 l1 = linear([X_sym], [n_ins], n_hid, name="linear_l",
-            random_state=random_state)
+            random_state=random_state, init_func=init)
 
 
 def step(in_t, mask_t, h1_tm1, h2_tm1, h3_tm1):
     h1_fork = gru_fork([in_t, h3_tm1], [n_hid, n_hid], n_hid, name="h1_fork",
-                       random_state=random_state)
+                       random_state=random_state, init_func=init)
     h1_t = gru(h1_fork, h1_tm1, [n_hid], n_hid, mask=mask_t, name="rec_l1",
-               random_state=random_state)
+               random_state=random_state, init_func=init)
 
     h2_fork = gru_fork([in_t, h1_t], [n_hid, n_hid], n_hid, name="h2_fork",
-                       random_state=random_state)
+                       random_state=random_state, init_func=init)
     h2_t = gru(h2_fork, h2_tm1, [n_hid], n_hid, mask=mask_t, name="rec_l2",
-               random_state=random_state)
+               random_state=random_state, init_func=init)
 
-    h3_fork = gru_fork([in_t, h2_t], [n_hid, n_hid], n_hid, name="h3_fork",
-                       random_state=random_state)
+    h3_fork = gru_fork([in_t, h1_t, h2_t], [n_hid, n_hid, n_hid], n_hid, name="h3_fork",
+                       random_state=random_state, init_func=init)
     h3_t = gru(h3_fork, h3_tm1, [n_hid], n_hid, mask=mask_t, name="rec_l3",
-               random_state=random_state)
+               random_state=random_state, init_func=init)
     return h1_t, h2_t, h3_t
 
 (h1, h2, h3), _ = theano.scan(step,
@@ -114,13 +126,14 @@ def step(in_t, mask_t, h1_tm1, h2_tm1, h3_tm1):
 
 y_pred = linear([l1, h1, h2, h3], [n_hid, n_hid, n_hid, n_hid],
                 n_outs, name="out_l",
-                random_state=random_state)
+                random_state=random_state, init_func=init)
 
 loss = masked_cost(((y_pred - y_sym) ** 2), y_mask_sym)
 cost = loss.sum(axis=2).mean(axis=1).mean(axis=0)
 
 params = list(get_params().values())
 grads = tensor.grad(cost, params)
+grads = gradient_norm_rescaling(grads)
 
 learning_rate = 0.0002
 opt = adam(params, learning_rate)

@@ -4,18 +4,27 @@ import os
 import numpy as np
 #import theano
 
+def rsync_sub(filedir):
+    # Only works on /Tmp/kastner, for me, on lisa servers
+    if not os.path.exists(filedir):
+        if filedir[-1] != "/":
+            fd = filedir + "/"
+        else:
+            fd = filedir
+        os.makedirs(fd)
+        # assumes first part is /Tmp/kastner
+        sp = filedir.split("/")
+        post = "/".join(sp[3:])
+        nfsdir = "/data/lisatmp4/kastner/" + post #vctk_American_speakers/norm_info/"
+        cmd = "rsync -avhp %s %s" % (nfsdir, fd)
+        pe(cmd, shell=True)
+
 filedir = "/Tmp/kastner/vctk_American_speakers/norm_info/"
-if not os.path.exists(filedir):
-    if filedir[-1] != "/":
-        fd = filedir + "/"
-    else:
-        fd = filedir
-    os.makedirs(fd)
-    nfsdir = "/data/lisatmp4/kastner/vctk_American_speakers/norm_info/"
-    cmd = "rsync -avhp %s %s" % (nfsdir, fd)
-    pe(cmd, shell=True)
+rsync_sub(filedir)
 
 numpy_filedir = "/Tmp/kastner/vctk_American_speakers/numpy_features/"
+rsync_sub(numpy_filedir)
+
 files = [numpy_filedir + fs for fs in os.listdir(numpy_filedir)]
 minibatch_size = 8
 
@@ -50,8 +59,8 @@ if ext == "pkl":
     predict_function = checkpoint_dict["predict_function"]
 
     # skip some of the shorter ones
-    for i in range(20):
-        X_mb, y_mb, X_mb_mask, y_mb_mask = next(train_itr)
+    for i in range(70):
+        X_mb, y_mb, X_mb_mask, y_mb_mask = next(valid_itr)
 
     n_hid = 1024
     minibatch_size = 8

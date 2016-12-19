@@ -10,12 +10,16 @@ def c(x):
     return np.cast["float32"](x)
 
 
-def gradient_clipping(grads, rescale=5.):
+def gradient_norm_rescaling(grads, rescale=5.):
     grad_norm = tensor.sqrt(sum(map(lambda x: tensor.sqr(x).sum(), grads)))
     scaling_num = rescale
     scaling_den = tensor.maximum(rescale, grad_norm)
     scaling = scaling_num / scaling_den
     return [g * scaling for g in grads]
+
+
+def gradient_clipping(grads, magnitude=100.):
+    return [g.clip(-magnitude, magnitude) for g in grads]
 
 
 class sgd(object):
