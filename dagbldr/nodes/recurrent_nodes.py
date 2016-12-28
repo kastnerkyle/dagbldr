@@ -286,3 +286,89 @@ def gru(step_input, previous_state, list_of_input_dims, hidden_dim,
     next_state = (next_state * update) + (previous_state * (1. - update))
     next_state = mask[:, None] * next_state + (1. - mask[:, None]) * previous_state
     return next_state
+
+
+def gaussian_attention(list_of_step_inputs, list_of_step_input_dims,
+                       previous_state,
+                       previous_attention_position,
+                       previous_attention_weight,
+                       full_conditioning_tensor,
+                       conditioning_dim,
+                       next_proj_dim,
+                       att_dim=10,
+                       cell_type="gru",
+                       step_mask=None, conditioning_mask=None, name=None,
+                       batch_normalize=False, mode_switch=None,
+                       random_state=None, strict=True, init_func="default"):
+    """
+    returns h_t (hidden state of inner rnn)
+            k_t (attention position for each attention element)
+            w_t (attention weights for each element of conditioning tensor)
+
+        Use w_t for following projection/prediction
+    """
+    if name is None:
+        name = get_name()
+    else:
+        name = name + "_gaussian_attention"
+
+    #TODO: specialize for jose style init...
+    if init_func == "default":
+        forward_init = None
+        hidden_init = "ortho"
+    else:
+        raise ValueError()
+
+    check = any([si.ndim != 2 for si in list_of_step_inputs])
+    if check:
+        raise ValueError("Unable to support step_input with n_dims != 2")
+
+    if cell_type == "gru":
+        fork1 = gru_fork(list_of_step_inputs + [previous_attention_weight],
+                        list_of_step_input_dims + [conditioning_dim], next_proj_dim,
+                        name=name + "_fork", random_state=random_state)
+        h_t = gru(fork1, previous_state, [next_proj_dim], next_proj_dim,
+                  mask=step_mask, name=name + "_rec", random_state=random_state,
+                  init_func="normal")
+    else:
+        raise ValueError("Unsupported cell_type %s" % cell_type)
+
+    u = tensor.arange(full_conditioning_tensor.shape[0]).dimshuffle('x', 'x', 0)
+    u = tensor.cast(u, theano.config.floatX)
+
+    def calc_phi(k_t, a_t, b_t, u_c):
+        a_t = a_t.dimshuffle(0, 1, 'x')
+        b_t = b_t.dimshuffle(0, 1, 'x')
+        ss1 = (k_t.dimshuffle(0, 1, 'x') - u_c) ** 2
+        ss2 = -b_t * ss1
+        ss3 = a_t * tensor.exp(ss2)
+        ss4 = ss3.sum(axis=1)
+        return ss4
+
+    ret = projection(
+        list_of_inputs=[h_t], list_of_input_dims=[next_proj_dim],
+        proj_dim=3 * att_dim, name=name, batch_normalize=batch_normalize,
+        mode_switch=mode_switch, random_state=random_state,
+        strict=strict, init_func="normal", act_func=linear_activation)
+    a_t = ret[:, :att_dim]
+    b_t = ret[:, att_dim:2 * att_dim]
+    k_t = ret[:, 2 * att_dim:]
+
+    k_tm1 = previous_attention_position
+    ctx = full_conditioning_tensor
+    ctx_mask = conditioning_mask
+    if ctx_mask is None:
+        ctx_mask = tensor.alloc(1., ctx.shape[0], 1)
+
+    a_t = tensor.exp(a_t)
+    b_t = tensor.exp(b_t)
+    k_t = k_tm1 + tensor.exp(k_t)
+
+    ss_t = calc_phi(k_t, a_t, b_t, u)
+    # calculate and return stopping criteria
+    #sh_t = calc_phi(k_t, a_t, b_t, u_max)
+    ss5 = ss_t.dimshuffle(0, 1, 'x')
+    # mask using conditioning mask
+    ss6 = ss5 * ctx.dimshuffle(1, 0, 2) * ctx_mask.dimshuffle(1, 0, 'x')
+    w_t = ss6.sum(axis=1)
+    return h_t, k_t, w_t

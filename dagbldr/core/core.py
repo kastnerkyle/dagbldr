@@ -226,7 +226,9 @@ def convert_to_one_hot(itr, n_classes, dtype="int32"):
 def _special_check():
     ip_addr = socket.gethostbyname(socket.gethostname())
     subnet = ".".join(ip_addr.split(".")[:-1])
-    if subnet == "132.204.25" or subnet == "132.204.26":
+    whitelist = ["132.204.24", "132.204.25", "132.204.26"]
+    subnet_match = [subnet == w for w in whitelist]
+    if any(subnet_match):
         logger.info("Found special runtime environment, saving to /Tmp")
         return True
     else:
@@ -1174,6 +1176,7 @@ def filled_js_template_from_results_dict(results_dict, default_show="all"):
         show_key = "true" if show else "false"
         return "{\n    name: '%s',\n    data: %s,\n    visible: %s\n},\n" % (
             str(key), str(values), show_key)
+
     data_part = [gen_js_field_for_key_value(k, results_dict[k], True)
                  if k in default_show or default_show == "all"
                  else gen_js_field_for_key_value(k, results_dict[k], False)
@@ -1631,6 +1634,7 @@ def run_loop(train_loop_function, train_itr,
 
                         logger.info("Update checkpoint after train mb %i" % train_mb_count)
                         logger.info("Current mean cost %f" % np.mean(partial_train_costs))
+                        # TODO: Add epoch traces to output plots
                         this_results_dict["this_epoch_train_auto"] = train_costs[:train_mb_count]
                         tmb = train_costs[:train_mb_count]
                         running_train_mean = np.cumsum(tmb) / (np.arange(train_mb_count) + 1)
@@ -1797,6 +1801,13 @@ def run_loop(train_loop_function, train_itr,
                 # Tracking if checkpoints are made
                 checkpoint_dict["train_checkpoint_auto"] = overall_train_checkpoint
                 checkpoint_dict["valid_checkpoint_auto"] = overall_valid_checkpoint
+
+                this_keys = this_results_dict.keys()
+                if "this_epoch_train_auto" in this_keys:
+                    checkpoint_dict["zoom_train_trace_epoch_%i_auto" % e_i] = this_results_dict["this_epoch_train_auto"]
+
+                if "this_epoch_train_mean_auto" in this_keys:
+                    checkpoint_dict["zoom_train_trace_epoch_mean_%i_auto" % e_i] = this_results_dict["this_epoch_train_mean_auto"]
 
                 logger.info("Host %s, script %s" % (hostname, script))
                 logger.info("Epoch %i complete" % e_i)

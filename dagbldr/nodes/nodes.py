@@ -646,6 +646,10 @@ def projection(list_of_inputs, list_of_input_dims, proj_dim, name=None,
         init_func = np_tanh_fan_uniform
     elif init_func == "normal":
         init_func = np_normal
+    elif init_func == "unit_normal":
+        def ini(shape, random_state):
+            return np_normal(shape, random_state, scale=1.)
+        init_func = ini
 
     try:
         W = get_shared(W_name)
