@@ -296,6 +296,7 @@ def gaussian_attention(list_of_step_inputs, list_of_step_input_dims,
                        conditioning_dim,
                        next_proj_dim,
                        att_dim=10,
+                       average_step=1.,
                        cell_type="gru",
                        step_mask=None, conditioning_mask=None, name=None,
                        batch_normalize=False, mode_switch=None,
@@ -326,7 +327,8 @@ def gaussian_attention(list_of_step_inputs, list_of_step_input_dims,
     if cell_type == "gru":
         fork1 = gru_fork(list_of_step_inputs + [previous_attention_weight],
                         list_of_step_input_dims + [conditioning_dim], next_proj_dim,
-                        name=name + "_fork", random_state=random_state)
+                        name=name + "_fork", random_state=random_state,
+                        init_func="normal")
         h_t = gru(fork1, previous_state, [next_proj_dim], next_proj_dim,
                   mask=step_mask, name=name + "_rec", random_state=random_state,
                   init_func="normal")
@@ -362,7 +364,7 @@ def gaussian_attention(list_of_step_inputs, list_of_step_input_dims,
 
     a_t = tensor.exp(a_t)
     b_t = tensor.exp(b_t)
-    k_t = k_tm1 + tensor.exp(k_t)
+    k_t = k_tm1 + np.cast["float32"](float(average_step)) * tensor.exp(k_t)
 
     ss_t = calc_phi(k_t, a_t, b_t, u)
     # calculate and return stopping criteria

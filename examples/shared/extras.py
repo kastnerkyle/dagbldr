@@ -438,7 +438,9 @@ class masked_synthesis_sequence_iterator(object):
                  stop_index=np.inf,
                  normalized=True,
                  normalization_file="default",
-                 itr_type="aligned"):
+                 itr_type="aligned",
+                 randomize=False,
+                 random_state=None):
         self.minibatch_size = minibatch_size
         self.normalized = normalized
         """
@@ -592,13 +594,29 @@ class masked_synthesis_sequence_iterator(object):
 
         self.slice_start_ = start_index
         self.file_sample_lengths = file_sample_lengths
+        if random_state is not None:
+            self.random_state = random_state
+        self.randomize = randomize
+        if self.randomize and random_state is None:
+            raise ValueError("random_state must be given for randomize=True")
 
-        # reorder files according to length - shortest to longest
-        s_to_l = np.argsort(self.file_sample_lengths)
-        reordered_filename_list = []
-        for i in s_to_l:
-            reordered_filename_list.append(self.filename_list[i])
-        self.filename_list = reordered_filename_list
+        def reorder_assign():
+            # reorder files according to length - shortest to longest
+            s_to_l = np.argsort(self.file_sample_lengths)
+            reordered_filename_list = []
+            for i in s_to_l:
+                reordered_filename_list.append(self.filename_list[i])
+
+            # THIS TRUNCATES! Should already be handled by truncation in
+            # filename splitting, but still something to watch out for
+            reordered_splitlist = list(zip(*[iter(reordered_filename_list)] * self.minibatch_size))
+            self.random_state.shuffle(reordered_splitlist)
+            reordered_filename_list = [item for sublist in reordered_splitlist
+                                       for item in sublist]
+            self.filename_list = reordered_filename_list
+
+        self._shuffle = reorder_assign
+        self._shuffle()
 
         '''
         all_files = sorted(self.filename_list)
@@ -647,6 +665,8 @@ class masked_synthesis_sequence_iterator(object):
 
     def reset(self):
         self.reset_gens()
+        if self.randomize:
+            self._shuffle()
 
     def __iter__(self):
         return self
@@ -679,7 +699,8 @@ class masked_synthesis_sequence_iterator(object):
                 mtl = max([len(o[0]) for o in out])
                 mal = max([len(o[1]) for o in out])
                 text = [o[0] for o in out]
-                phone_oh_size = len(self._code2phone)
+                # +1 to account for last element
+                phone_oh_size = len(self._code2phone) + 1
                 aud = [o[1] for o in out]
                 text_arr = np.zeros((mtl, self.minibatch_size, phone_oh_size)).astype("float32")
                 text_mask_arr = np.zeros_like(text_arr[:, :, 0])

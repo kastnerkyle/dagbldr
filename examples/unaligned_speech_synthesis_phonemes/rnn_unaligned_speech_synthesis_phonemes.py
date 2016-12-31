@@ -45,13 +45,19 @@ pe(cmd, shell=True)
 files = [filedir + fs for fs in os.listdir(filedir)]
 minibatch_size = 8
 n_hid = 1024
+random_state = np.random.RandomState(1999)
+
 train_itr = masked_synthesis_sequence_iterator(files, minibatch_size,
                                                itr_type="unaligned_phonemes",
-                                               stop_index=.9)
+                                               stop_index=.9,
+                                               randomize=True,
+                                               random_state=random_state)
 
 valid_itr = masked_synthesis_sequence_iterator(files, minibatch_size,
                                                itr_type="unaligned_phonemes",
-                                               start_index=.9)
+                                               start_index=.9,
+                                               randomize=True,
+                                               random_state=random_state)
 X_mb, y_mb, X_mb_mask, y_mb_mask = next(train_itr)
 y_mb = np.concatenate((0. * y_mb[0, :, :][None], y_mb))
 y_mb_mask = np.concatenate((1. * y_mb_mask[0, :][None], y_mb_mask))
@@ -61,6 +67,8 @@ n_text_ins = X_mb.shape[-1]
 n_audio_ins = y_mb.shape[-1]
 n_audio_outs = y_mb.shape[-1]
 att_dim = 10
+train_noise_pwr = 4.
+valid_noise_pwr = train_noise_pwr
 
 """
 from extras import generate_merlin_wav
@@ -79,9 +87,9 @@ train_h1_init = np.zeros((minibatch_size, n_hid)).astype("float32")
 train_h2_init = np.zeros((minibatch_size, n_hid)).astype("float32")
 train_h3_init = np.zeros((minibatch_size, n_hid)).astype("float32")
 
-valid_h1_init = np.zeros((minibatch_size, n_hid)) .astype("float32")
-valid_h2_init = np.zeros((minibatch_size, n_hid)) .astype("float32")
-valid_h3_init = np.zeros((minibatch_size, n_hid)) .astype("float32")
+valid_h1_init = np.zeros((minibatch_size, n_hid)).astype("float32")
+valid_h2_init = np.zeros((minibatch_size, n_hid)).astype("float32")
+valid_h3_init = np.zeros((minibatch_size, n_hid)).astype("float32")
 
 train_w1_init = np.zeros((minibatch_size, n_text_ins)).astype("float32")
 valid_w1_init = np.zeros((minibatch_size, n_text_ins)).astype("float32")
@@ -93,6 +101,9 @@ X_sym = tensor.tensor3()
 y_sym = tensor.tensor3()
 X_mask_sym = tensor.fmatrix()
 y_mask_sym = tensor.fmatrix()
+
+noise_pwr = tensor.fscalar()
+noise_pwr.tag.test_value = 1.
 
 h1_0 = tensor.fmatrix()
 h2_0 = tensor.fmatrix()
@@ -116,17 +127,13 @@ h3_0.tag.test_value = train_h3_init
 y_tm1_sym = y_sym[:-1]
 y_tm1_mask_sym = y_mask_sym[:-1]
 
-"""
 # how to do noise?
 srng = theano.tensor.shared_randomstreams.RandomStreams(0)
-noise = srng.normal(y_mb[:-1].shape)
-y_tm1_sym = y_tm1_sym + noise
-"""
+noise = srng.normal(y_tm1_sym.shape)
+y_tm1_sym = y_tm1_sym + noise_pwr * noise
 
 y_t_sym = y_sym[1:]
 y_t_mask_sym = y_mask_sym[1:]
-
-random_state = np.random.RandomState(1999)
 
 
 init = "normal"
@@ -137,6 +144,7 @@ def step(in_t, mask_t, h1_tm1, h2_tm1, h3_tm1, k_tm1, w_tm1,
                                           h1_tm1, k_tm1, w_tm1,
                                           ctx, n_text_ins, n_hid,
                                           att_dim=att_dim,
+                                          average_step=0.05,
                                           cell_type="gru",
                                           conditioning_mask=ctx_mask,
                                           step_mask=mask_t, name="rec_gauss_att",
@@ -162,7 +170,7 @@ y_pred = linear([h2, h3], [n_hid, n_hid],
                 random_state=random_state, init_func=init)
 
 loss = masked_cost(((y_pred - y_t_sym) ** 2), y_t_mask_sym)
-cost = loss.sum(axis=2).mean(axis=1).mean(axis=0)
+cost = loss.sum() / (y_mask_sym.sum() + 1.)
 
 params = list(get_params().values())
 grads = tensor.grad(cost, params)
@@ -174,14 +182,14 @@ updates = opt.updates(params, grads)
 
 
 fit_function = theano.function([X_sym, y_sym, X_mask_sym, y_mask_sym,
-                                h1_0, h2_0, h3_0, k1_0, w1_0],
+                                h1_0, h2_0, h3_0, k1_0, w1_0, noise_pwr],
                                [cost, h1, h2, h3], updates=updates)
 cost_function = theano.function([X_sym, y_sym, X_mask_sym, y_mask_sym,
-                                 h1_0, h2_0, h3_0, k1_0, w1_0],
+                                 h1_0, h2_0, h3_0, k1_0, w1_0, noise_pwr],
                                 [cost, h1, h2, h3])
 predict_function = theano.function([X_sym, X_mask_sym, y_sym, y_mask_sym,
-                                    h1_0, h2_0, h3_0, k1_0, w1_0],
-                                   [y_pred, h1, h2, h3])
+                                    h1_0, h2_0, h3_0, k1_0, w1_0, noise_pwr],
+                                   [y_pred, h1, h2, h3, k, w])
 
 
 def train_loop(itr):
@@ -190,7 +198,7 @@ def train_loop(itr):
     y_mask = np.concatenate((1. * y_mask[0, :][None], y_mask))
     cost, h1, h2, h3 = fit_function(X_mb, y_mb, X_mask, y_mask,
                                     train_h1_init, train_h2_init, train_h3_init,
-                                    train_k1_init, train_w1_init)
+                                    train_k1_init, train_w1_init, train_noise_pwr)
     return [cost]
 
 
@@ -200,7 +208,7 @@ def valid_loop(itr):
     y_mask = np.concatenate((1. * y_mask[0, :][None], y_mask))
     cost, h1, h2, h3 = cost_function(X_mb, y_mb, X_mask, y_mask,
                                      valid_h1_init, valid_h2_init, valid_h3_init,
-                                     valid_k1_init, valid_w1_init)
+                                     valid_k1_init, valid_w1_init, valid_noise_pwr)
     return [cost]
 
 checkpoint_dict = create_checkpoint_dict(locals())
