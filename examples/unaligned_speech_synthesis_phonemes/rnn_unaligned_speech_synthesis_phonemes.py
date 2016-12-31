@@ -6,7 +6,7 @@ import numpy as np
 import theano
 from theano import tensor
 
-from dagbldr.nodes import linear
+from dagbldr.nodes import linear, embed
 from dagbldr.nodes import gru
 from dagbldr.nodes import gru_fork
 from dagbldr.nodes import gaussian_attention
@@ -66,7 +66,7 @@ train_itr.reset()
 n_text_ins = X_mb.shape[-1]
 n_audio_ins = y_mb.shape[-1]
 n_audio_outs = y_mb.shape[-1]
-att_dim = 10
+att_dim = 20
 train_noise_pwr = 4.
 valid_noise_pwr = train_noise_pwr
 
@@ -149,13 +149,13 @@ def step(in_t, mask_t, h1_tm1, h2_tm1, h3_tm1, k_tm1, w_tm1,
                                           conditioning_mask=ctx_mask,
                                           step_mask=mask_t, name="rec_gauss_att",
                                           random_state=random_state)
-    h2_fork = gru_fork([w1_t, h3_tm1], [n_text_ins, n_hid], n_hid,
+    h2_fork = gru_fork([in_t, h1_t, w1_t, h3_tm1], [n_audio_ins, n_hid, n_text_ins, n_hid], n_hid,
                        name="h2_fork",
                        random_state=random_state, init_func=init)
     h2_t = gru(h2_fork, h2_tm1, [n_hid], n_hid, mask=mask_t, name="rec_l2",
                random_state=random_state, init_func=init)
 
-    h3_fork = gru_fork([w1_t, h2_t], [n_text_ins, n_hid], n_hid, name="h3_fork",
+    h3_fork = gru_fork([in_t, h1_t, w1_t, h2_t], [n_audio_ins, n_hid, n_text_ins, n_hid], n_hid, name="h3_fork",
                        random_state=random_state, init_func=init)
     h3_t = gru(h3_fork, h3_tm1, [n_hid], n_hid, mask=mask_t, name="rec_l3",
                random_state=random_state, init_func=init)
@@ -165,12 +165,13 @@ def step(in_t, mask_t, h1_tm1, h2_tm1, h3_tm1, k_tm1, w_tm1,
                                     sequences=[y_tm1_sym, y_tm1_mask_sym],
                                     outputs_info=[h1_0, h2_0, h3_0, k1_0, w1_0],
                                     non_sequences=[X_sym, X_mask_sym])
-y_pred = linear([h2, h3], [n_hid, n_hid],
+comb = h1 + h2 + h3
+y_pred = linear([comb], [n_hid],
                 n_audio_outs, name="out_l",
                 random_state=random_state, init_func=init)
 
 loss = masked_cost(((y_pred - y_t_sym) ** 2), y_t_mask_sym)
-cost = loss.sum() / (y_mask_sym.sum() + 1.)
+cost = loss.sum() / (y_mask_sym.sum() + 1E-5)
 
 params = list(get_params().values())
 grads = tensor.grad(cost, params)
