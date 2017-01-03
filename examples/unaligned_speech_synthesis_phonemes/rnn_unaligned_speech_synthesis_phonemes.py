@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 from extras import masked_synthesis_sequence_iterator, pe
+from extras import jose_masked_synthesis_sequence_iterator
 import os
 
 import numpy as np
@@ -19,6 +20,7 @@ from dagbldr.optimizers import adam
 from dagbldr.optimizers import gradient_norm_rescaling
 from dagbldr.training import TrainingLoop
 
+'''
 filedir = "/Tmp/kastner/vctk_American_speakers/norm_info/"
 if not os.path.exists(filedir):
     if filedir[-1] != "/":
@@ -58,7 +60,31 @@ valid_itr = masked_synthesis_sequence_iterator(files, minibatch_size,
                                                start_index=.9,
                                                randomize=True,
                                                random_state=random_state)
-X_mb, y_mb, X_mb_mask, y_mb_mask = next(train_itr)
+'''
+
+filedir = "/Tmp/kastner/"
+if not os.path.exists(filedir):
+    if filedir[-1] != "/":
+        fd = filedir + "/"
+    else:
+        fd = filedir
+    os.makedirs(fd)
+filep = filedir + "vctk.hdf5"
+nfsp = "/data/lisatmp4/kastner/vctk_American_speakers/vctk.hdf5"
+cmd = "rsync -avhp %s %s" % (nfsp, filep)
+pe(cmd, shell=True)
+
+random_state = np.random.RandomState(1999)
+minibatch_size = 8
+n_hid = 1024
+train_itr = jose_masked_synthesis_sequence_iterator("/Tmp/kastner/vctk.hdf5",
+                                                    minibatch_size=minibatch_size,
+                                                    stop_index=.9)
+valid_itr = jose_masked_synthesis_sequence_iterator("/Tmp/kastner/vctk.hdf5",
+                                                    minibatch_size=minibatch_size,
+                                                    start_index=.9)
+X_mb, y_mb, X_mb_mask, y_mb_mask = next(valid_itr)
+
 y_mb = np.concatenate((0. * y_mb[0, :, :][None], y_mb))
 y_mb_mask = np.concatenate((1. * y_mb_mask[0, :][None], y_mb_mask))
 train_itr.reset()

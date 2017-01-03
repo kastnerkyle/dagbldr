@@ -1698,11 +1698,9 @@ def run_loop(train_loop_function, train_itr,
                                   None,
                                   None))
             except StopIteration:
-                # Slice so that only valid data is in the minibatch
-                # this also assumes there is not a variable number
-                # of minibatches in an epoch!
+                # Slice so that only seen data is in the minibatch
                 train_stop = time.time()
-                train_costs = train_costs[:train_mb_count]
+                final_train_costs = train_costs[:train_mb_count]
                 print("")
                 logger.info("Starting validation, epoch %i" % e_i)
                 valid_start = time.time()
@@ -1734,7 +1732,7 @@ def run_loop(train_loop_function, train_itr,
                 print("")
                 valid_stop = time.time()
                 epoch_stop = time.time()
-                valid_costs = valid_costs[:valid_mb_count]
+                final_valid_costs = valid_costs[:valid_mb_count]
 
                 # Logging and tracking training statistics
                 epoch_time_delta = epoch_stop - epoch_start
@@ -1752,7 +1750,7 @@ def run_loop(train_loop_function, train_itr,
                 overall_valid_deltas.append(valid_time_delta)
                 overall_valid_times.append(valid_time_total)
 
-                mean_epoch_train_cost = np.mean(train_costs)
+                mean_epoch_train_cost = np.mean(final_train_costs)
                 # np.inf trick to avoid taking the min of length 0 list
                 old_min_train_cost = min(overall_train_costs + [np.inf])
                 if np.isnan(mean_epoch_train_cost):
@@ -1761,7 +1759,7 @@ def run_loop(train_loop_function, train_itr,
                     raise StopIteration("NaN detected in train")
                 overall_train_costs.append(mean_epoch_train_cost)
 
-                mean_epoch_valid_cost = np.mean(valid_costs)
+                mean_epoch_valid_cost = np.mean(final_valid_costs)
                 old_min_valid_cost = min(overall_valid_costs + [np.inf])
                 if np.isnan(mean_epoch_valid_cost):
                     logger.info("Previous valid costs %s" % overall_valid_costs[-5:])

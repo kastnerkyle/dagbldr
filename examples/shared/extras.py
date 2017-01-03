@@ -4,6 +4,7 @@ import os
 import shutil
 import stat
 import subprocess
+import h5py
 
 
 def copytree(src, dst, symlinks=False, ignore=None):
@@ -739,6 +740,119 @@ class masked_synthesis_sequence_iterator(object):
             am = am[None, None, :]
             astd = astd[None, None, :]
         return af * astd + am
+
+
+class jose_masked_synthesis_sequence_iterator(object):
+    def __init__(self, vctk_hdf5, minibatch_size,
+                 start_index=0,
+                 stop_index=np.inf,
+                 randomize=False,
+                 random_state=None):
+        self.minibatch_size = minibatch_size
+        self.start_index = start_index
+        self.stop_index = stop_index
+
+        self.n_audio_features = 63
+        self.n_text_features = 420
+        self.n_features = self.n_text_features + self.n_audio_features
+
+        self.slice_start_ = start_index
+        if random_state is not None:
+            self.random_state = random_state
+        self.randomize = randomize
+        if self.randomize and random_state is None:
+            raise ValueError("random_state must be given for randomize=True")
+
+        self._text_utts = []
+        self._phoneme_utts = []
+        self._code2phone = None
+        self._code2char = None
+        self._current_idx = self.start_index
+
+        hf = h5py.File(vctk_hdf5, 'r')
+        self._file = hf
+        self._n_file = len(hf['features'])
+        self.phone_oh_size = 44
+
+        if stop_index == np.inf:
+            self.stop_index = self._n_file
+
+        elif stop_index < 1:
+            self.stop_index = int(stop_index * self._n_file)
+
+        if start_index < 1:
+            self.start_index = int(start_index * self._n_file)
+
+        """
+        'features'
+        'features_shape_labels'
+        'features_shapes'
+        'full_labels'
+        'full_labels_shape_labels'
+        'full_labels_shapes'
+        'phonemes'
+        'speaker_index'
+        'text'
+        'unaligned_phonemes'
+        """
+
+        def load(i):
+            features = self._file['features'][i]
+            fshp = self._file['features_shapes'][i]
+            features = features.reshape(fshp)
+            phones = self._file['unaligned_phonemes'][i]
+            return (phones, features)
+
+        self._load_file = load
+
+        def rg():
+            self._current_idx = self.start_index
+
+        rg()
+        self.reset_gens = rg
+
+    def reset(self):
+        self.reset_gens()
+        if self.randomize:
+            self._shuffle()
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        return self.__next__()
+
+    def __next__(self):
+        try:
+            out = []
+            for i in range(self.minibatch_size):
+                if self._current_idx >= self.stop_index:
+                    raise ValueError()
+                r = self._load_file(self._current_idx)
+                out.append(r)
+                self._current_idx += 1
+
+            mtl = max([len(o[0]) for o in out])
+            mal = max([len(o[1]) for o in out])
+            text = [o[0] for o in out]
+            phone_oh_size = self.phone_oh_size
+            aud = [o[1] for o in out]
+            text_arr = np.zeros((mtl, self.minibatch_size, phone_oh_size)).astype("float32")
+            text_mask_arr = np.zeros_like(text_arr[:, :, 0])
+            audio_arr = np.zeros((mal, self.minibatch_size, self.n_audio_features)).astype("float32")
+            audio_mask_arr = np.zeros_like(audio_arr[:, :, 0])
+            for i in range(self.minibatch_size):
+                aud_i = aud[i]
+                text_i = text[i]
+                audio_arr[:len(aud_i), i, :] = aud_i
+                audio_mask_arr[:len(aud_i), i] = 1.
+                for n, j in enumerate(text_i):
+                    text_arr[n, i, j] = 1.
+                text_mask_arr[:len(text_i), i] = 1.
+            return text_arr, audio_arr, text_mask_arr, audio_mask_arr
+        except ValueError:
+            self.reset()
+            raise StopIteration("End of dataset iterator reached")
 
 # Source the tts_env_script
 env_script = "tts_env.sh"
