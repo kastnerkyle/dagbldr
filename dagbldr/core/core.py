@@ -228,8 +228,12 @@ def _special_check():
     subnet = ".".join(ip_addr.split(".")[:-1])
     whitelist = ["132.204.24", "132.204.25", "132.204.26"]
     subnet_match = [subnet == w for w in whitelist]
+    hostname = socket.gethostname()
     if any(subnet_match):
-        logger.info("Found special runtime environment, saving to /Tmp")
+        logger.info("Found special runtime environment!")
+        logger.info("IP address: %s" % ip_addr)
+        logger.info("Hostname: %s" % hostname)
+        logger.info("Saving to /Tmp")
         return True
     else:
         return False
@@ -250,7 +254,7 @@ def get_checkpoint_dir(checkpoint_dir=None, folder=None, create_dir=True):
 
     if folder is None:
         checkpoint_name = get_script()
-        tmp = checkpoint_dir + os.path.sep + checkpoint_name + "_" + checkpoint_uuid + "_" + checkpoint_import_time
+        tmp = checkpoint_dir + os.path.sep + checkpoint_name + "_" + checkpoint_import_time  + "_" + checkpoint_uuid
         checkpoint_dir = tmp
     else:
         checkpoint_dir = os.path.join(checkpoint_dir, folder)
@@ -1475,7 +1479,7 @@ def run_loop(train_loop_function, train_itr,
 
     train_loop = train_loop_function
     valid_loop = valid_loop_function
-    ident = str(uuid.uuid4())[:8]
+    ident = checkpoint_uuid
     random_state = np.random.RandomState(2177)
     monitor_prob = 1. / monitor_frequency
 

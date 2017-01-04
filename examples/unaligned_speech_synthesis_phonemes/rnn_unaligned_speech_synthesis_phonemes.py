@@ -13,7 +13,7 @@ from dagbldr.nodes import gru_fork
 from dagbldr.nodes import gaussian_attention
 from dagbldr.nodes import masked_cost
 
-from dagbldr import get_params
+from dagbldr import get_params, get_logger
 from dagbldr.utils import create_checkpoint_dict
 
 from dagbldr.optimizers import adam
@@ -94,7 +94,7 @@ n_audio_ins = y_mb.shape[-1]
 n_audio_outs = y_mb.shape[-1]
 att_dim = 20
 train_noise_pwr = 4.
-valid_noise_pwr = train_noise_pwr
+valid_noise_pwr = 0.
 
 """
 from extras import generate_merlin_wav
@@ -129,7 +129,7 @@ X_mask_sym = tensor.fmatrix()
 y_mask_sym = tensor.fmatrix()
 
 noise_pwr = tensor.fscalar()
-noise_pwr.tag.test_value = 1.
+noise_pwr.tag.test_value = train_noise_pwr
 
 h1_0 = tensor.fmatrix()
 h2_0 = tensor.fmatrix()
@@ -201,9 +201,9 @@ cost = loss.sum() / (y_mask_sym.sum() + 1E-5)
 
 params = list(get_params().values())
 grads = tensor.grad(cost, params)
-grads = gradient_norm_rescaling(grads)
+grads = gradient_norm_rescaling(grads, 10.)
 
-learning_rate = 0.0002
+learning_rate = 0.0001
 opt = adam(params, learning_rate)
 updates = opt.updates(params, grads)
 
@@ -218,8 +218,20 @@ predict_function = theano.function([X_sym, X_mask_sym, y_sym, y_mask_sym,
                                     h1_0, h2_0, h3_0, k1_0, w1_0, noise_pwr],
                                    [y_pred, h1, h2, h3, k, w])
 
+# approximate number of minibatches per epoch
+n_per_epoch = .9 * 1020
+n_til_decrease = 9 * n_per_epoch
+train_mb_count = 0
+logger = get_logger()
 
 def train_loop(itr):
+    global train_mb_count
+    global train_noise_pwr
+    train_mb_count += 1
+    if train_mb_count >= n_til_decrease:
+        train_mb_count = 0
+        train_noise_pwr = max([train_noise_pwr - 1., 1.])
+        logger.info("Train noise pwr set to %s" % str(train_noise_pwr))
     X_mb, y_mb, X_mask, y_mask = next(itr)
     y_mb = np.concatenate((0. * y_mb[0, :, :][None], y_mb))
     y_mask = np.concatenate((1. * y_mask[0, :][None], y_mask))
