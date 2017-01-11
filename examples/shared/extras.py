@@ -1,4 +1,5 @@
 from __future__ import print_function
+from collections import defaultdict
 import numpy as np
 import os
 import shutil
@@ -6,6 +7,9 @@ import stat
 import subprocess
 import h5py
 
+
+english_charset = ['\t', '!', ' ', "'", '-', ',', '.', '?', 'A', 'C', 'B', 'E', 'D', 'G', 'F', 'I', 'H', 'K', 'J', 'M', 'L', 'O', 'N', 'Q', 'P', 'S', 'R', 'U', 'T', 'W', 'V', 'Y', 'Z', 'a', '`', 'c', 'b', 'e', 'd', 'g', 'f', 'i', 'h', 'k', 'j', 'm', 'l', 'o', 'n', 'q', 'p', 's', 'r', 'u', 't', 'w', 'v', 'y', 'x', 'z']
+german_charset = ['\x87', '\x93', '\x99', '\x9b', '\x9f', '\xa1', ' ', '\xa7', '\xa9', '(', '\xad', ',', '.', '\xb3', ':', '\xc3', 'B', '\xc5', 'D', 'F', 'H', 'J', 'L', 'N', 'P', 'R', 'T', 'V', 'X', 'Z', 'b', 'd', 'f', 'h', 'j', 'l', 'n', 'p', 'r', 't', 'v', 'x', 'z', '\x80', '\x84', '\x8e', '\x96', '\x9c', '\x9e', '!', '\xa0', '\xa2', '\xa4', "'", ')', '\xa8', '\xaa', '-', '/', '1', '\xb4', '\xb6', ';', '\xbc', '?', 'A', 'C', '\xc2', 'E', '\xc4', 'G', 'I', 'K', 'M', 'O', 'Q', 'S', 'U', 'W', 'Y', 'a', 'c', '\xe2', 'e', 'g', 'i', 'k', 'm', 'o', 'q', 's', 'u', 'w', 'y']
 
 def copytree(src, dst, symlinks=False, ignore=None):
     if not os.path.exists(dst):
@@ -439,11 +443,14 @@ class masked_synthesis_sequence_iterator(object):
                  stop_index=np.inf,
                  normalized=True,
                  normalization_file="default",
-                 itr_type="aligned",
+                 itr_type="unaligned_text",
+                 class_set="english_chars",
+                 extra_options="lower",
                  randomize=False,
                  random_state=None):
         self.minibatch_size = minibatch_size
         self.normalized = normalized
+        self.extra_options = extra_options
         """
         if start_index != 0 or stop_index != np.inf:
             raise AttributeError("start_index and stop_index not yet supported")
@@ -480,6 +487,8 @@ class masked_synthesis_sequence_iterator(object):
         self.n_audio_features = 63
         self.n_text_features = 420
         self.n_features = self.n_text_features + self.n_audio_features
+
+        self.class_set = class_set
 
         if normalized:
             # should give a unique hash for same files and start, stop index
@@ -523,6 +532,8 @@ class masked_synthesis_sequence_iterator(object):
                     a = np.load(f)
                     af = a["audio_features"]
                     tf = a["text_features"]
+                    if af.shape[0] < 1 or tf.shape[0] < 1:
+                        continue
                     file_sample_lengths[n] = len(af)
 
                     if n == 0:
@@ -632,22 +643,39 @@ class masked_synthesis_sequence_iterator(object):
         if itr_type not in allowed_itr_types:
             raise AttributeError("Unknown itr_type %s, allowable types %s" % (itr_type, allowed_itr_types))
 
+        allowed_class_sets = ["english_chars", "german_chars"]
+        if self.class_set not in allowed_class_sets:
+            raise ValueError("class_set argument %s not currently supported!" % class_set,
+                             "Allowed types are %s" % str(allowed_class_sets))
 
         self._text_utts = []
         self._phoneme_utts = []
-        self._code2phone = None
-        self._code2char = None
+        if self.class_set == "english_chars":
+            cs = english_charset
+            if self.extra_options == "lower":
+                cs = list(set([csi.lower() for csi in cs]))
+        elif self.class_set == "german_chars":
+            cs = german_charset
+            if self.extra_options == "lower":
+                cs = list(set([csi.lower() for csi in cs]))
+
+        self._rlu = {k: v for k, v in enumerate(cs)}
+        self._lu = {v: k for k, v in self._rlu.items()}
 
         def npload(f):
             d = np.load(f)
             #self._text_utts = self._text_utts.append(d["text"])
             #self._phoneme_utts = self._phoneme_utts.append(d["phonemes"])
-            self._code2phone = d["code2phone"]
-            self._code2char = d["code2char"]
+            # FIXME: Why are there filenames in some entries of code2phone...
+            # FIXME: Standardize feature making between phones and text
             if self.itr_type == "unaligned_phonemes":
                 return (d["phonemes"], d["audio_features"])
             elif self.itr_type == "unaligned_text":
-                pass
+                txt = [di for di in str(d["text"])]
+                if self.extra_options == "lower":
+                    txt = [ti.lower() for ti in txt]
+                txt = np.array([self._lu[ti] for ti in txt])
+                return (txt, d["audio_features"])
             else:
                 return np.hstack((d["text_features"], d["audio_features"]))
 
@@ -658,8 +686,6 @@ class masked_synthesis_sequence_iterator(object):
             self._total_epoch_seen = 0
             self._text_utts = []
             self._phoneme_utts = []
-            self._code2phone = None
-            self._code2char = None
 
         rg()
         self.reset_gens = rg
@@ -696,14 +722,13 @@ class masked_synthesis_sequence_iterator(object):
                 return (out_arr[:, :, :self.n_text_features],
                         out_arr[:, :, self.n_text_features:],
                         text_mask_arr, audio_mask_arr)
-            elif self.itr_type == "unaligned_phonemes":
+            elif self.itr_type == "unaligned_phonemes" or self.itr_type == "unaligned_text":
                 mtl = max([len(o[0]) for o in out])
                 mal = max([len(o[1]) for o in out])
                 text = [o[0] for o in out]
-                # +1 to account for last element
-                phone_oh_size = len(self._code2phone) + 1
+                oh_size = len(self._lu)
                 aud = [o[1] for o in out]
-                text_arr = np.zeros((mtl, self.minibatch_size, phone_oh_size)).astype("float32")
+                text_arr = np.zeros((mtl, self.minibatch_size, oh_size)).astype("float32")
                 text_mask_arr = np.zeros_like(text_arr[:, :, 0])
                 audio_arr = np.zeros((mal, self.minibatch_size, self.n_audio_features)).astype("float32")
                 audio_mask_arr = np.zeros_like(audio_arr[:, :, 0])
