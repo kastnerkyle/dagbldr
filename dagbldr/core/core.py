@@ -1281,7 +1281,8 @@ def save_checkpoint(save_path, pickle_item, use_resource_dir=True):
         pickle.dump(pickle_item, f, protocol=-1)
         # Failing for recent theano/large bidir with attention models?
         #dill.dump(pickle_item, f, protocol=-1)
-    logger.info("Checkpoint saving complete %s\nTime to checkpoint %s seconds" % (save_path, str(time.time() - start_time)))
+    logger.info("Checkpoint saving complete %s" % save_path)
+    logger.info("Time to checkpoint %s seconds" % str(time.time() - start_time))
 
 
 @coroutine
