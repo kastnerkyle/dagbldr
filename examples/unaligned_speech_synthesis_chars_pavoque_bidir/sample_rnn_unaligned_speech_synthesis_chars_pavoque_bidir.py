@@ -98,7 +98,8 @@ if ext == "pkl":
     all_phones = []
     all_attention = []
 
-    n_rounds = 2
+    # Surely 40 samples is enough for anyone...
+    n_rounds = 5
 
     for n in range(n_rounds):
         X_mb, y_mb, X_mb_mask, y_mb_mask = next(valid_itr)
@@ -178,20 +179,35 @@ elif ext == "npz":
         r = d["audio_results_%i" % n]
         r = r * cmp_std + cmp_mean
 
+        genfile = "%i_%i_gen"
+        truefile = "%i_%i_true"
         for i in range(r.shape[1]):
             total_count += 1
-            name = "mygen_%i_%i" % (n, i)
+            name = genfile % (n, i)
             generate_merlin_wav(r[:, i, :], file_basename=name,
                                 do_post_filtering=False)
             wavpath = "gen/" + name + ".wav"
             sr, wav = wavfile.read(wavpath)
+            # remove DC
+            wav = wav - np.mean(wav.astype("float32"))
             mn = np.mean(np.abs(wav))
             md = np.median(np.abs(wav))
-            heuristic = np.abs(md - mn)
-            if heuristic < 20:
+            heuristic = mn
+            if heuristic < 40:
                 print("Detected insufficient activity in heuristic - removing %s" % wavpath)
                 removed_count += 1
                 os.remove(wavpath)
+
+        gtr = d["groundtruth_%i" % n]
+        gtr = gtr * cmp_std + cmp_mean
+
+        for i in range(gtr.shape[1]):
+            genpart = genfile % (n, i)
+            if os.path.exists("gen/" + genpart + ".wav"):
+                # Only get GT for files that made it past heuristic check
+                truename = truefile % (n, i)
+                generate_merlin_wav(gtr[:, i, :], file_basename=truename,
+                                    do_post_filtering=False)
     print("Reconstruction complete")
     print("Accepted ratio %s" % str((total_count - removed_count) / float(total_count)))
 else:

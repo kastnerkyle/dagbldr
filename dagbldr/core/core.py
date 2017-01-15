@@ -1073,7 +1073,8 @@ def coroutine(func):
     return start
 
 
-def save_weights(save_path, items_dict, use_resource_dir=True):
+def save_weights(save_path, items_dict, use_resource_dir=True,
+                 latest_tag=None):
     logger.info("Not saving weights due to copy issues in npz")
     return
     weights_dict = {}
@@ -1207,7 +1208,7 @@ def filled_js_template_from_results_dict(results_dict, default_show="all"):
 
 
 def save_results_as_html(save_path, results_dict, use_resource_dir=True,
-                         default_no_show="_auto"):
+                         default_no_show="_auto", latest_tag=None):
     show_keys = [k for k in results_dict.keys()
                  if default_no_show not in k]
     as_html = filled_js_template_from_results_dict(
@@ -1217,6 +1218,11 @@ def save_results_as_html(save_path, results_dict, use_resource_dir=True,
     logger.info("Saving HTML results %s" % save_path)
     with open(save_path, "w") as f:
         f.writelines(as_html)
+    if latest_tag is not None:
+        latest_path = os.path.join(get_checkpoint_dir(), latest_tag + "_latest.html")
+        if os.path.exists(latest_path):
+            os.remove(latest_path)
+        os.symlink(save_path, latest_path)
     logger.info("Completed HTML results saving %s" % save_path)
 
 
@@ -1270,9 +1276,9 @@ def threaded_weights_writer(maxsize=25):
         messages.put((1, GeneratorExit))
 
 
-def save_checkpoint(save_path, pickle_item, use_resource_dir=True):
+def save_checkpoint(save_path, pickle_item, use_resource_dir=True,
+                    latest_tag=None):
     if use_resource_dir:
-        # Assume it ends with .py ...
         save_path = os.path.join(get_checkpoint_dir(), save_path)
     sys.setrecursionlimit(40000)
     logger.info("Saving checkpoint to %s" % save_path)
@@ -1281,6 +1287,12 @@ def save_checkpoint(save_path, pickle_item, use_resource_dir=True):
         pickle.dump(pickle_item, f, protocol=-1)
         # Failing for recent theano/large bidir with attention models?
         #dill.dump(pickle_item, f, protocol=-1)
+    if latest_tag is not None:
+        latest_path = os.path.join(get_checkpoint_dir(),
+                                   latest_tag + "_latest.pkl")
+        if os.path.exists(latest_path):
+            os.remove(latest_path)
+        os.symlink(save_path, latest_path)
     logger.info("Checkpoint saving complete %s" % save_path)
     logger.info("Time to checkpoint %s seconds" % str(time.time() - start_time))
 
@@ -1311,7 +1323,7 @@ def threaded_checkpoint_writer(maxsize=25):
 
 
 @coroutine
-def threaded_timed_writer(sleep_time=15 * 60):
+def threaded_timed_writer(sleep_time=15 * 60, tag=None):
     """
     Expects to be sent a tuple of
     (objective,
@@ -1359,14 +1371,18 @@ def threaded_timed_writer(sleep_time=15 * 60):
                     else:
                         results_tup, weights_tup, checkpoint_tup = item
                         if results_tup is not None:
-                            save_path, results_dict = results_tup
-                            save_results_as_html(save_path, results_dict)
+                            results_save_path, results_dict = results_tup
+                            save_results_as_html(results_save_path,
+                                                 results_dict,
+                                                 latest_tag=tag)
                         if weights_tup is not None:
-                            save_path, items_dict = weights_tup
-                            save_weights(save_path, items_dict)
+                            weights_save_path, items_dict = weights_tup
+                            save_weights(weights_save_path, items_dict,
+                                         latest_tag=tag)
                         if checkpoint_tup is not None:
-                            save_path, pickle_item = checkpoint_tup
-                            save_checkpoint(save_path, pickle_item)
+                            checkpoint_save_path, pickle_item = checkpoint_tup
+                            save_checkpoint(checkpoint_save_path, pickle_item,
+                                            latest_tag=tag)
                         # write the last one if training is done
                         # but do not stop on a "results only" save
                         artifact_flag = checkpoint_tup is not None or weights_tup is not None
@@ -1593,13 +1609,14 @@ def run_loop(train_loop_function, train_itr,
     logger.info("Total parameter count %f M" % (total / 1E6))
 
     # Timed versus forced here
-    tcw = threaded_timed_writer(write_every_n_seconds)
-    vcw = threaded_timed_writer(write_every_n_seconds)
+    tcw = threaded_timed_writer(write_every_n_seconds, tag="time")
+    vcw = threaded_timed_writer(write_every_n_seconds, tag="valid")
 
     if _special_check():
-        fcw = threaded_timed_writer(sleep_time=write_every_n_seconds)
+        fcw = threaded_timed_writer(sleep_time=write_every_n_seconds,
+                                    tag="force")
     else:
-        fcw = threaded_timed_writer(sleep_time=0)
+        fcw = threaded_timed_writer(sleep_time=0, tag="force")
 
     best_train_checkpoint_pickle = None
     best_train_checkpoint_epoch = 0

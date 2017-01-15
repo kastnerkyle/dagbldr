@@ -687,10 +687,13 @@ class masked_synthesis_sequence_iterator(object):
             self._text_utts = []
             self._phoneme_utts = []
 
+        self.n_epochs_seen_ = 0
         rg()
         self.reset_gens = rg
 
-    def reset(self):
+    def reset(self, internal_reset=False):
+        if internal_reset:
+            self.n_epochs_seen_ += 1
         self.reset_gens()
         if self.randomize:
             self._shuffle()
@@ -742,10 +745,10 @@ class masked_synthesis_sequence_iterator(object):
                     text_mask_arr[:len(text_i), i] = 1.
                 return text_arr, audio_arr, text_mask_arr, audio_mask_arr
         except StopIteration:
-            self.reset()
+            self.reset(internal_reset=True)
             raise StopIteration("Stop index reached")
         except IndexError:
-            self.reset()
+            self.reset(internal_reset=True)
             raise StopIteration("End of file list reached")
 
     def transform(self, audio_features, text_features=None):
