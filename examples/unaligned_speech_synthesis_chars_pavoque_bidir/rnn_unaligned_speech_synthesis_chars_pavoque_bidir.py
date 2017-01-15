@@ -45,6 +45,7 @@ cmd = "rsync -avhp %s %s" % (sdir, fd)
 pe(cmd, shell=True)
 
 files = [filedir + fs for fs in os.listdir(filedir)]
+files = [f for f in files if "neutral" in f]
 minibatch_size = 8
 n_hid = 1024
 random_state = np.random.RandomState(1999)
@@ -176,16 +177,48 @@ def encoder_step(in_t, mask_t, in_r_t, mask_r_t, h1_tm1, h1_r_tm1):
                           sequences=[X_sym, X_mask_sym, X_sym[::-1], X_mask_sym[::-1]],
                           outputs_info=[enc_h1_0, enc_h1_r_0])
 
-enc_ctx = enc_h1 + enc_h1_r[::-1]
+enc_ctx = enc_h1 + enc_h1_r #tensor.concatenate((enc_h1, enc_h1_r[::-1]), axis=2)
+'''
+
+def encoder_step(in_t, mask_t, h1_tm1):
+    enc_h1_fork = gru_fork([in_t], [n_text_ins], n_hid,
+                           name="enc_h1_fork",
+                           random_state=random_state, init_func=init)
+    enc_h1_t = gru(enc_h1_fork, h1_tm1, [n_hid], n_hid, mask=mask_t, name="enc_h1",
+                   random_state=random_state, init_func=init)
+    return enc_h1_t
 
 
+enc_h1, _ = theano.scan(encoder_step,
+                          sequences=[X_sym, X_mask_sym],
+                          outputs_info=[enc_h1_0])
+
+enc_ctx = enc_h1 #+ enc_h1_r #tensor.concatenate((enc_h1, enc_h1_r[::-1]), axis=2)
+'''
+
+# English
+# average characters per word 4.7, average words per minute 133
+# 625.1 characters per minute
+# 625.1 * .9 (90% speaking rate)
+# 562.59 / 60 characters per second
+# 9.3765 characters per second
+# 0.1 seconds per character
+# 5ms per output step = 0.005s
+# .005 s per step * 9.3765 chars per secon
+# 0.047
+
+average_step = 0.05
+#min_step = .9 * average_step
+#max_step = 1.25 * average_step
 def step(in_t, mask_t, h1_tm1, h2_tm1, h3_tm1, k_tm1, w_tm1,
          ctx, ctx_mask):
     h1_t, k1_t, w1_t = gaussian_attention([in_t], [n_audio_ins],
                                           h1_tm1, k_tm1, w_tm1,
                                           ctx, n_ctx_ins, n_hid,
                                           att_dim=att_dim,
-                                          average_step=0.05,
+                                          average_step=average_step,
+                                          #min_step=min_step,
+                                          #max_step=max_step,
                                           cell_type="gru",
                                           conditioning_mask=ctx_mask,
                                           step_mask=mask_t, name="rec_gauss_att",
@@ -223,15 +256,15 @@ opt = adam(params, learning_rate)
 updates = opt.updates(params, grads)
 
 
-fit_function = theano.function([X_sym, y_sym, X_mask_sym, y_mask_sym,
-                                enc_h1_0, enc_h1_r_0, h1_0, h2_0, h3_0, k1_0, w1_0, noise_pwr],
-                               [cost, enc_h1, enc_h1_r, h1, h2, h3], updates=updates)
-cost_function = theano.function([X_sym, y_sym, X_mask_sym, y_mask_sym,
-                                 enc_h1_0, enc_h1_r_0, h1_0, h2_0, h3_0, k1_0, w1_0, noise_pwr],
-                                [cost, enc_h1, enc_h1, h1, h2, h3])
-predict_function = theano.function([X_sym, X_mask_sym, y_sym, y_mask_sym,
-                                    enc_h1_0, enc_h1_r_0, h1_0, h2_0, h3_0, k1_0, w1_0, noise_pwr],
-                                   [y_pred, enc_h1, enc_h1_r, h1, h2, h3, k, w])
+in_args = [X_sym, y_sym, X_mask_sym, y_mask_sym]
+in_args += [enc_h1_0, enc_h1_r_0, h1_0, h2_0, h3_0, k1_0, w1_0, noise_pwr]
+out_args = [cost, enc_h1, enc_h1_r, h1, h2, h3]
+pred_out_args= [y_pred, enc_h1, enc_h1_r, h1, h2, h3, k, w]
+
+
+fit_function = theano.function(in_args, out_args, updates=updates)
+cost_function = theano.function(in_args, out_args)
+predict_function = theano.function(in_args, pred_out_args)
 
 # approximate number of minibatches per epoch
 n_per_epoch = .9 * 1020
@@ -252,9 +285,9 @@ def train_loop(itr):
     y_mb = np.concatenate((0. * y_mb[0, :, :][None], y_mb))
     y_mask = np.concatenate((1. * y_mask[0, :][None], y_mask))
     cost, enc_h1, enc_h1_r, h1, h2, h3 = fit_function(X_mb, y_mb, X_mask, y_mask,
-                                                      train_enc_h1_init, train_enc_h1_r_init,
-                                                      train_h1_init, train_h2_init, train_h3_init,
-                                                      train_k1_init, train_w1_init, train_noise_pwr)
+                                            train_enc_h1_init, train_enc_h1_r_init,
+                                            train_h1_init, train_h2_init, train_h3_init,
+                                            train_k1_init, train_w1_init, train_noise_pwr)
     return [cost]
 
 
@@ -263,9 +296,9 @@ def valid_loop(itr):
     y_mb = np.concatenate((0. * y_mb[0, :, :][None], y_mb))
     y_mask = np.concatenate((1. * y_mask[0, :][None], y_mask))
     cost, enc_h1, enc_h1_r, h1, h2, h3 = cost_function(X_mb, y_mb, X_mask, y_mask,
-                                                       valid_enc_h1_init, valid_enc_h1_r_init,
-                                                       valid_h1_init, valid_h2_init, valid_h3_init,
-                                                       valid_k1_init, valid_w1_init, valid_noise_pwr)
+                                             valid_enc_h1_init, valid_enc_h1_r_init,
+                                             valid_h1_init, valid_h2_init, valid_h3_init,
+                                             valid_k1_init, valid_w1_init, valid_noise_pwr)
     return [cost]
 
 checkpoint_dict = create_checkpoint_dict(locals())

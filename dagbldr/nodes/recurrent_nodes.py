@@ -297,6 +297,8 @@ def gaussian_attention(list_of_step_inputs, list_of_step_input_dims,
                        next_proj_dim,
                        att_dim=10,
                        average_step=1.,
+                       min_step=0.,
+                       max_step=None,
                        cell_type="gru",
                        step_mask=None, conditioning_mask=None, name=None,
                        batch_normalize=False, mode_switch=None,
@@ -364,7 +366,15 @@ def gaussian_attention(list_of_step_inputs, list_of_step_input_dims,
 
     a_t = tensor.exp(a_t)
     b_t = tensor.exp(b_t)
-    k_t = k_tm1 + np.cast["float32"](float(average_step)) * tensor.exp(k_t)
+    step_size = np.cast["float32"](float(average_step)) * tensor.exp(k_t)
+    if max_step is None:
+        max_step = tensor.cast(ctx.shape[0], "float32")
+    else:
+        max_step = np.cast["float32"](float(max_step))
+    step_size = step_size.clip(min_step, max_step)
+    k_t = k_tm1 + step_size
+    # Don't let the gaussian go off the end
+    k_t = k_t.clip(np.cast["float32"](0.), tensor.cast(ctx.shape[0], "float32"))
 
     ss_t = calc_phi(k_t, a_t, b_t, u)
     # calculate and return stopping criteria
