@@ -24,7 +24,6 @@ def _dumps(arg):
    return pickle.dumps(arg, 1)
 
 import copy
-import gc
 import threading
 import logging
 import uuid
@@ -1753,9 +1752,17 @@ def run_loop(train_loop_function, train_itr,
                                  None,
                                  None))
             except StopIteration:
-                # Slice so that only seen data is in the minibatch
                 train_stop = time.time()
+
+                # Save the epoch trace
                 final_train_costs = train_costs[:train_mb_count]
+                tmb = final_train_costs
+                running_train_mean = np.cumsum(tmb) / (np.arange(train_mb_count) + 1)
+                # needs to be a list
+                running_train_mean = list(running_train_mean)
+                this_results_dict["this_epoch_train_auto"] = final_train_costs
+                this_results_dict["this_epoch_train_mean_auto"] = running_train_mean
+
                 print("")
                 logger.info("Starting validation, epoch %i" % e_i)
                 valid_start = time.time()
@@ -1861,6 +1868,96 @@ def run_loop(train_loop_function, train_itr,
 
                 if "this_epoch_train_mean_auto" in this_keys:
                     checkpoint_dict["zoom_train_trace_epoch_mean_%i_auto" % e_i] = this_results_dict["this_epoch_train_mean_auto"]
+
+                zoom_keys = [ck for ck in checkpoint_dict.keys()
+                             if "zoom_" in ck]
+
+                # keep traces with:
+                # overall min
+                # overall max
+                # average min
+                # average max
+                # lowest max vs median
+                # highest max vs median
+                matched_keys = {}
+                matched_num = {}
+
+                matched_num["local_min"] = np.inf
+                matched_keys["local_min"] = None
+
+                matched_num["local_max"] = -np.inf
+                matched_keys["local_max"] = None
+
+                matched_num["average_min"] = np.inf
+                matched_keys["average_min"] = None
+
+                matched_num["average_max"] = -np.inf
+                matched_keys["average_max"] = -np.inf
+
+                matched_num["lowest_max_vs_med"] = np.inf
+                matched_keys["lowest_max_vs_med"] = None
+
+                matched_keys["highest_max_vs_med"] = -np.inf
+                matched_num["highest_max_vs_med"] = None
+
+                matched_num["lowest_med_vs_min"] = np.inf
+                matched_keys["lowest_med_vs_min"] = None
+
+                matched_keys["highest_med_vs_min"] = -np.inf
+                matched_num["highest_med_vs_min"] = None
+
+                if len(zoom_keys) > len(list(matched_keys.keys())):
+                    for zk in zoom_keys:
+                        mn = min(checkpoint_dict[zk])
+                        mx = max(checkpoint_dict[zk])
+                        avg = np.mean(checkpoint_dict[zk])
+                        md = np.median(checkpoint_dict[zk])
+
+                        if mn < matched_num["local_min"]:
+                            matched_num["local_min"] = mn
+                            matched_keys["local_min"] = zk
+
+                        if mx > matched_num["local_max"]:
+                            matched_num["local_max"] = mx
+                            matched_keys["local_max"] = zk
+
+                        if avg < matched_num["average_min"]:
+                            matched_num["average_min"] = avg
+                            matched_keys["average_min"] = zk
+
+                        if avg > matched_num["average_max"]:
+                            matched_num["average_max"] = avg
+                            matched_keys["average_max"] = zk
+
+                        mx_vs_md = mx - md
+                        if mx_vs_md > matched_num["highest_max_vs_med"]:
+                            matched_num["highest_max_vs_med"] = mx_vs_md
+                            matched_keys["highest_max_vs_med"] = zk
+
+                        if mx_vs_md < matched_num["lowest_max_vs_med"]:
+                            matched_num["lowest_max_vs_med"] = mx_vs_md
+                            matched_keys["lowest_max_vs_med"] = zk
+
+                        md_vs_mn = md - mn
+                        if md_vs_mn > matched_num["highest_med_vs_min"]:
+                            matched_num["highest_med_vs_min"] = md_vs_mn
+                            matched_keys["highest_med_vs_min"] = zk
+
+                        if md_vs_mn < matched_num["lowest_med_vs_min"]:
+                            matched_num["lowest_med_vs_min"] = md_vs_mn
+                            matched_keys["lowest_med_vs_min"] = zk
+
+                    rev_matched = {v: k for k, v in matched_keys.items()}
+                    keep_keys = rev_matched.keys()
+                    delete_keys = [zk for zk in zoom_keys if zk not in keep_keys]
+                    for zk in zoom_keys:
+                        if zk in keep_keys:
+                            # could add logic to change name
+                            pass
+                        elif zk in delete_keys:
+                            del checkpoint_dict[zk]
+                        else:
+                            raise ValueError("Unexpected error, key %s" % zk)
 
                 logger.info("Host %s, script %s" % (hostname, script))
                 logger.info("Epoch %i complete" % e_i)

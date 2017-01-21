@@ -10,6 +10,7 @@ import h5py
 
 english_charset = ['\t', '!', ' ', "'", '-', ',', '.', '?', 'A', 'C', 'B', 'E', 'D', 'G', 'F', 'I', 'H', 'K', 'J', 'M', 'L', 'O', 'N', 'Q', 'P', 'S', 'R', 'U', 'T', 'W', 'V', 'Y', 'Z', 'a', '`', 'c', 'b', 'e', 'd', 'g', 'f', 'i', 'h', 'k', 'j', 'm', 'l', 'o', 'n', 'q', 'p', 's', 'r', 'u', 't', 'w', 'v', 'y', 'x', 'z']
 german_charset = ['\x87', '\x93', '\x99', '\x9b', '\x9f', '\xa1', ' ', '\xa7', '\xa9', '(', '\xad', ',', '.', '\xb3', ':', '\xc3', 'B', '\xc5', 'D', 'F', 'H', 'J', 'L', 'N', 'P', 'R', 'T', 'V', 'X', 'Z', 'b', 'd', 'f', 'h', 'j', 'l', 'n', 'p', 'r', 't', 'v', 'x', 'z', '\x80', '\x84', '\x8e', '\x96', '\x9c', '\x9e', '!', '\xa0', '\xa2', '\xa4', "'", ')', '\xa8', '\xaa', '-', '/', '1', '\xb4', '\xb6', ';', '\xbc', '?', 'A', 'C', '\xc2', 'E', '\xc4', 'G', 'I', 'K', 'M', 'O', 'Q', 'S', 'U', 'W', 'Y', 'a', 'c', '\xe2', 'e', 'g', 'i', 'k', 'm', 'o', 'q', 's', 'u', 'w', 'y']
+romanian_charset = [' ', ',', '.', '?', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'R', 'S', 'T', 'U', 'V', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '\x83', '\x8e', '\x9e', '\x9f', '\xa2', '\xa3', '\xae', '\xc3', '\xc4', '\xc5']
 
 def copytree(src, dst, symlinks=False, ignore=None):
     if not os.path.exists(dst):
@@ -129,314 +130,6 @@ def _incremental_mean_and_var(X, last_mean=.0, last_variance=None,
     return updated_mean, updated_variance, updated_sample_count
 
 
-class synthesis_sequence_iterator(object):
-    def __init__(self, filename_list, minibatch_size,
-                 truncation_length,
-                 iterator_length=None,
-                 start_index=0,
-                 stop_index=np.inf,
-                 normalize=True):
-        self.minibatch_size = minibatch_size
-        self.truncation_length = truncation_length
-        self.iterator_length = iterator_length
-        self.normalize = normalize
-
-        """
-        if start_index != 0 or stop_index != np.inf:
-            raise AttributeError("start_index and stop_index not yet supported")
-        """
-        n_files = len(filename_list)
-        if start_index != 0:
-            if start_index < 0:
-                start_index = n_files + start_index
-            elif start_index < 1:
-                start_index = int(n_files * start_index)
-            else:
-                start_index = start_index
-
-        if stop_index != np.inf:
-            if stop_index < 0:
-                start_index = n_files + stop_index
-            elif stop_index < 1:
-                stop_index = int(n_files * stop_index)
-            else:
-                stop_index = stop_index
-        else:
-            stop_index = None
-        filename_list = sorted(filename_list)
-        filename_list = filename_list[start_index:stop_index]
-        self.start_index = start_index
-        self.stop_index = stop_index
-        self.filename_list = filename_list
-
-        if iterator_length is None or normalize:
-            # should give a unique hash for same files and start, stop index
-            hashi = hash(str(start_index) + "_" + str(stop_index))
-            for f in sorted(filename_list):
-                hashi ^= hash(f)
-            stats_file_name = "_stored_stats_%s.npz" % hashi
-            if os.path.exists(stats_file_name):
-                ss = np.load(stats_file_name)
-                audio_normalization_mean = ss["audio_normalization_mean"]
-                audio_normalization_std = ss["audio_normalization_std"]
-                audio_sample_count = ss["audio_sample_count"]
-                audio_min = ss["audio_min"]
-                audio_max = ss["audio_max"]
-                text_normalization_mean = ss["text_normalization_mean"]
-                text_normalization_std = ss["text_normalization_std"]
-                text_sample_count = ss["text_sample_count"]
-                text_min = ss["text_min"]
-                text_max = ss["text_max"]
-                file_count = ss["file_count"]
-            else:
-                print("Calculating statistics")
-                # get iterator length and normalization constants
-                audio_normalization_mean = None
-                audio_normalization_std = None
-                audio_sample_count = np.zeros((1,))
-                audio_min = None
-                audio_max = None
-                text_normalization_mean = None
-                text_normalization_std = None
-                text_sample_count = np.zeros((1,))
-                text_min = None
-                text_max = None
-                file_count = np.zeros((1,))
-                for n, f in enumerate(filename_list):
-                    # continuous vs discrete check?
-                    # not needed, for now...
-                    print("Loading file %i" % (n + 1))
-                    a = np.load(f)
-                    af = a["audio_features"]
-                    tf = a["text_features"]
-
-                    if n == 0:
-                        audio_normalization_mean = np.mean(af, axis=0)
-                        audio_normalization_std = np.std(af, axis=0)
-                        audio_sample_count[0] = len(af)
-
-                        audio_min = np.min(af, axis=0)
-                        audio_max = np.max(af, axis=0)
-
-                        text_normalization_mean = np.mean(tf, axis=0)
-                        text_normalization_std = np.std(tf, axis=0)
-                        text_sample_count[0] = len(tf)
-
-                        text_min = np.min(tf, axis=0)
-                        text_max = np.max(tf, axis=0)
-                    else:
-                        aumean, austd, aucount = _incremental_mean_and_var(
-                            af, audio_normalization_mean, audio_normalization_std,
-                            audio_sample_count[0])
-
-                        audio_normalization_mean = aumean
-                        audio_normalization_std = austd
-                        audio_sample_count[0] = aucount
-
-                        audio_min = np.minimum(af.min(axis=0), audio_min)
-                        audio_max = np.maximum(af.max(axis=0), audio_max)
-
-                        tumean, tustd, tucount = _incremental_mean_and_var(
-                            tf, text_normalization_mean, text_normalization_std,
-                            text_sample_count[0])
-
-                        text_normalization_mean = tumean
-                        text_normalization_std = tustd
-                        text_sample_count[0] = tucount
-
-                        text_min = np.minimum(tf.min(axis=0), text_min)
-                        text_max = np.maximum(tf.max(axis=0), text_max)
-                    file_count[0] = n + 1
-                save_dict = {"audio_normalization_mean": audio_normalization_mean,
-                             "audio_normalization_std": audio_normalization_std,
-                             "audio_sample_count": audio_sample_count,
-                             "audio_min": audio_min,
-                             "audio_max": audio_max,
-                             "text_normalization_mean": text_normalization_mean,
-                             "text_normalization_std": text_normalization_std,
-                             "text_sample_count": text_sample_count,
-                             "text_min": text_min,
-                             "text_max": text_max,
-                             "file_count": file_count}
-                np.savez_compressed(stats_file_name, **save_dict)
-            self.audio_normalization_mean = audio_normalization_mean
-            self.audio_normalization_std = audio_normalization_std
-            self.audio_sample_count = audio_sample_count
-            self.audio_min = audio_min
-            self.audio_max = audio_max
-
-            #assert np.all((audio_max - audio_min) > 0), "constant audio features detected"
-
-            self.text_normalization_mean = text_normalization_mean
-            self.text_normalization_std = text_normalization_std
-            self.text_sample_count = text_sample_count
-            self.text_min = text_min
-            self.text_max = text_max
-
-            ind = ((text_max - text_min) == 0)
-            self.text_min[ind] = 0.
-            self.text_max[ind] = text_min[ind] + 1.
-
-            #print(np.where((text_max - text_min) == 0))
-            #assert np.all((text_max - text_min) > 0), "constant text features detected"
-
-            self.stacked_mean = np.concatenate((self.text_normalization_mean, self.audio_normalization_mean))
-            self.stacked_std = np.concatenate((self.text_normalization_std, self.audio_normalization_std))
-            self.stacked_min = np.concatenate((self.text_min, self.audio_min))
-            self.stacked_max = np.concatenate((self.text_max, self.audio_max))
-
-            # Don't divide by too small a standard dev (constant features...)
-            self.stacked_std[self.stacked_std < 1E-6] = 1.
-
-            self.file_count = file_count
-            self.n_audio_features = len(audio_normalization_mean)
-            self.n_text_features = len(text_normalization_mean)
-            self.n_features = self.n_text_features + self.n_audio_features
-
-        self.slice_start_ = start_index
-
-        calculated_iterator_length = audio_sample_count
-        self.iterator_length = calculated_iterator_length
-
-        self.iterator_length -= self.iterator_length % (minibatch_size * truncation_length)
-        self.sequence_length = self.iterator_length // minibatch_size
-
-        all_files = sorted(self.filename_list)
-        breakpoint_every = len(all_files) // minibatch_size
-        grouped_files = list(zip(*[iter(all_files)] * breakpoint_every))
-        assert sum([len(a) == breakpoint_every for a in grouped_files]) == len(grouped_files)
-        self.grouped_files = grouped_files
-
-        self._text_utts = []
-        self._phoneme_utts = []
-        self._code2phone = None
-        self._code2char = None
-
-        def npload(f):
-            d = np.load(f)
-            self._text_utts.append(d["text"])
-            self._phoneme_utts.append(d["phonemes"])
-            self._code2phone = d["code2phone"]
-            self._code2char = d["code2char"]
-            return np.hstack((d["text_features"], d["audio_features"]))
-
-        self._load_file = npload
-
-        def rg():
-            self.cur_buffer = [self._load_file(f0) for f in grouped_files for f0 in f[:1]]
-            self.cur_file_idx = [1 for i in range(len(grouped_files))]
-            self.cur_buffer_idx = [0 for i in range(len(grouped_files))]
-            self._total_epoch_seen = 0
-            self._text_utts = []
-            self._phoneme_utts = []
-            self._code2phone = None
-            self._code2char = None
-
-        rg()
-        self.reset_gens = rg
-
-    def reset(self):
-        self.reset_gens()
-
-    def __iter__(self):
-        return self
-
-    def next(self):
-        return self.__next__()
-
-    def _at(self, el):
-        return (el - self.audio_normalization_mean) / self.audio_normalization_std
-
-    def _tt(self, el):
-        # mimic what merlin does?
-        denom = (self.text_max - self.text_min)
-        # avoid pathological issues with constant features
-        denom[denom < 1E-6] = 1.
-        return .96 * ((el - self.text_min) / (self.text_max - self.text_min)) + 0.02
-        #return (el - self.stacked_mean) / self.stacked_std
-        #if self.normalize:
-            # normalize here
-        #    el = (el - self.stacked_mean) / self.stacked_std
-        #return el
-
-    def __next__(self):
-        try:
-            out = []
-            for i in range(self.minibatch_size):
-                start = self.cur_buffer_idx[i]
-                end = start + self.truncation_length
-                if end > len(self.cur_buffer[i]):
-                    fnext = self.grouped_files[i][self.cur_file_idx[i]]
-                    self.cur_file_idx[i] += 1
-                    self.cur_buffer[i] = np.vstack((self.cur_buffer[i][start:],
-                                                    self._load_file(fnext)))
-                    self.cur_buffer_idx[i] = 0
-                    start = 0
-                    end = start + self.truncation_length
-                out.append(self.cur_buffer[i][start:end])
-                self.cur_buffer_idx[i] = end
-            out_arr = np.asarray(out).transpose(1, 0, 2).astype("float32")
-            self._total_epoch_seen += len(out_arr)
-            return (self._tt(out_arr[:, :, :self.n_text_features]),
-                    self._at(out_arr[:, :, self.n_text_features:]))
-        except StopIteration:
-            self.reset()
-            raise StopIteration("Stop index reached")
-        except IndexError:
-            self.reset()
-            raise StopIteration("End of file list reached")
-
-    def transform(self, audio_features, text_features=None):
-        if text_features is not None:
-            raise ValueError("NYI")
-        af = audio_features
-        am = self.stacked_mean[self.n_text_features:]
-        astd = self.stacked_std[self.n_text_features:]
-        if audio_features.ndim == 2:
-            am = am[None, :]
-            astd = astd[None, :]
-            return (af - am) / astd
-        elif audio_features.ndim == 3:
-            am = am[None, None, :]
-            astd = astd[None, None, :]
-        return (af - am) / astd
-
-        '''
-        raise ValueError("NYI")
-        """
-        list_of strings should be, well, a list of strings
-        """
-        arr = [self._t(si) for s in list_of_strings for si in self._process(s)]
-        arr = np.asarray(arr)
-        if len(arr.shape) == 1:
-            arr = arr[None, :]
-        return arr.T.astype("float32")
-        '''
-
-    def inverse_transform(self, audio_features, text_features=None):
-        if text_features is not None:
-            raise ValueError("NYI")
-        af = audio_features
-        am = self.stacked_mean[self.n_text_features:]
-        astd = self.stacked_std[self.n_text_features:]
-        if audio_features.ndim == 2:
-            am = am[None, :]
-            astd = astd[None, :]
-            return af * astd + am
-        elif audio_features.ndim == 3:
-            am = am[None, None, :]
-            astd = astd[None, None, :]
-        return af * astd + am
-        '''
-        raise ValueError("NYI")
-        """
-        index_array should be 2D, shape (n_steps, minibatch_index)
-        """
-        return [[self.class_to_word[int(ai)]
-                 for ai in index_array[:, i]]
-                 for i in range(index_array.shape[1])]
-        '''
-
 class masked_synthesis_sequence_iterator(object):
     def __init__(self, filename_list, minibatch_size,
                  start_index=0,
@@ -451,10 +144,7 @@ class masked_synthesis_sequence_iterator(object):
         self.minibatch_size = minibatch_size
         self.normalized = normalized
         self.extra_options = extra_options
-        """
-        if start_index != 0 or stop_index != np.inf:
-            raise AttributeError("start_index and stop_index not yet supported")
-        """
+
         n_files = len(filename_list)
         if start_index != 0:
             if start_index < 0:
@@ -485,8 +175,6 @@ class masked_synthesis_sequence_iterator(object):
 
         self.file_count = len(filename_list)
         self.n_audio_features = 63
-        self.n_text_features = 420
-        self.n_features = self.n_text_features + self.n_audio_features
 
         self.class_set = class_set
 
@@ -503,11 +191,6 @@ class masked_synthesis_sequence_iterator(object):
                 audio_sample_count = ss["audio_sample_count"]
                 audio_min = ss["audio_min"]
                 audio_max = ss["audio_max"]
-                text_normalization_mean = ss["text_normalization_mean"]
-                text_normalization_std = ss["text_normalization_std"]
-                text_sample_count = ss["text_sample_count"]
-                text_min = ss["text_min"]
-                text_max = ss["text_max"]
                 file_count = ss["file_count"]
                 file_sample_lengths = ss["file_sample_lengths"]
             else:
@@ -518,11 +201,6 @@ class masked_synthesis_sequence_iterator(object):
                 audio_sample_count = np.zeros((1,))
                 audio_min = None
                 audio_max = None
-                text_normalization_mean = None
-                text_normalization_std = None
-                text_sample_count = np.zeros((1,))
-                text_min = None
-                text_max = None
                 file_count = np.zeros((1,))
                 file_sample_lengths = np.zeros((len(filename_list),))
                 for n, f in enumerate(filename_list):
@@ -531,8 +209,7 @@ class masked_synthesis_sequence_iterator(object):
                     print("Loading file %i" % (n + 1))
                     a = np.load(f)
                     af = a["audio_features"]
-                    tf = a["text_features"]
-                    if af.shape[0] < 1 or tf.shape[0] < 1:
+                    if af.shape[0] < 1:
                         continue
                     file_sample_lengths[n] = len(af)
 
@@ -543,13 +220,6 @@ class masked_synthesis_sequence_iterator(object):
 
                         audio_min = np.min(af, axis=0)
                         audio_max = np.max(af, axis=0)
-
-                        text_normalization_mean = np.mean(tf, axis=0)
-                        text_normalization_std = np.std(tf, axis=0)
-                        text_sample_count[0] = len(tf)
-
-                        text_min = np.min(tf, axis=0)
-                        text_max = np.max(tf, axis=0)
                     else:
                         aumean, austd, aucount = _incremental_mean_and_var(
                             af, audio_normalization_mean, audio_normalization_std,
@@ -562,27 +232,12 @@ class masked_synthesis_sequence_iterator(object):
                         audio_min = np.minimum(af.min(axis=0), audio_min)
                         audio_max = np.maximum(af.max(axis=0), audio_max)
 
-                        tumean, tustd, tucount = _incremental_mean_and_var(
-                            tf, text_normalization_mean, text_normalization_std,
-                            text_sample_count[0])
-
-                        text_normalization_mean = tumean
-                        text_normalization_std = tustd
-                        text_sample_count[0] = tucount
-
-                        text_min = np.minimum(tf.min(axis=0), text_min)
-                        text_max = np.maximum(tf.max(axis=0), text_max)
                     file_count[0] = n + 1
                 save_dict = {"audio_normalization_mean": audio_normalization_mean,
                              "audio_normalization_std": audio_normalization_std,
                              "audio_sample_count": audio_sample_count,
                              "audio_min": audio_min,
                              "audio_max": audio_max,
-                             "text_normalization_mean": text_normalization_mean,
-                             "text_normalization_std": text_normalization_std,
-                             "text_sample_count": text_sample_count,
-                             "text_min": text_min,
-                             "text_max": text_max,
                              "file_count": file_count,
                              "file_sample_lengths": file_sample_lengths}
                 np.savez_compressed(stats_file_name, **save_dict)
@@ -593,13 +248,10 @@ class masked_synthesis_sequence_iterator(object):
             subdir = "/".join(filename_list[0].split("/")[:-2])
             norm_info_dir = subdir + "/norm_info/"
             audio_norm_file = "norm_info_mgc_lf0_vuv_bap_%s_MVN.dat" % str(self.n_audio_features)
-            label_norm_file = "label_norm_HTS_%s.dat" % str(self.n_text_features)
             with open(norm_info_dir + audio_norm_file) as fid:
                 cmp_info = np.fromfile(fid, dtype=np.float32)
             cmp_info = cmp_info.reshape((2, -1))
             audio_norm = cmp_info
-            #audio_norm = load_binary_file(norm_info_dir + audio_norm_file, self.n_audio_features)
-            #label_norm = load_binary_file(norm_info_dir + label_norm_file, self.n_text_features)
 
         self.audio_mean = audio_norm[0, ]
         self.audio_std = audio_norm[1, ]
@@ -630,41 +282,32 @@ class masked_synthesis_sequence_iterator(object):
         self._shuffle = reorder_assign
         self._shuffle()
 
-        '''
-        all_files = sorted(self.filename_list)
-        breakpoint_every = len(all_files) // minibatch_size
-        grouped_files = list(zip(*[iter(all_files)] * breakpoint_every))
-        assert sum([len(a) == breakpoint_every for a in grouped_files]) == len(grouped_files)
-        self.grouped_files = grouped_files
-        '''
-
         self.itr_type = itr_type
         allowed_itr_types =["aligned", "unaligned_phonemes", "unaligned_text"]
         if itr_type not in allowed_itr_types:
             raise AttributeError("Unknown itr_type %s, allowable types %s" % (itr_type, allowed_itr_types))
 
-        allowed_class_sets = ["english_chars", "german_chars"]
+        allowed_class_sets = ["english_chars", "german_chars",
+                              "romanian_chars"]
         if self.class_set not in allowed_class_sets:
             raise ValueError("class_set argument %s not currently supported!" % class_set,
                              "Allowed types are %s" % str(allowed_class_sets))
 
-        self._text_utts = []
-        self._phoneme_utts = []
         if self.class_set == "english_chars":
             cs = english_charset
-            if self.extra_options == "lower":
-                cs = list(set([csi.lower() for csi in cs]))
         elif self.class_set == "german_chars":
             cs = german_charset
-            if self.extra_options == "lower":
-                cs = list(set([csi.lower() for csi in cs]))
+        elif self.class_set == "romanian_chars":
+            cs = romanian_charset
+
+        if self.extra_options == "lower":
+            cs = list(set([csi.lower() for csi in cs]))
 
         self._rlu = {k: v for k, v in enumerate(cs)}
         self._lu = {v: k for k, v in self._rlu.items()}
 
         def npload(f):
             d = np.load(f)
-            #self._text_utts = self._text_utts.append(d["text"])
             #self._phoneme_utts = self._phoneme_utts.append(d["phonemes"])
             # FIXME: Why are there filenames in some entries of code2phone...
             # FIXME: Standardize feature making between phones and text
@@ -683,11 +326,10 @@ class masked_synthesis_sequence_iterator(object):
 
         def rg():
             self._current_file_idx = 0
-            self._total_epoch_seen = 0
-            self._text_utts = []
-            self._phoneme_utts = []
 
         self.n_epochs_seen_ = 0
+        self.n_iterations_seen_ = 0
+        self.current_file_ids_ = [""] * self.minibatch_size
         rg()
         self.reset_gens = rg
 
@@ -708,23 +350,14 @@ class masked_synthesis_sequence_iterator(object):
         try:
             out = []
             for i in range(self.minibatch_size):
-                r = self._load_file(self.filename_list[self._current_file_idx])
+                fpath = self.filename_list[self._current_file_idx]
+                r = self._load_file(fpath)
                 out.append(r)
                 self._current_file_idx += 1
+                self.current_file_ids_[i] = fpath
 
             if self.itr_type == "aligned":
-                ml = max([len(o) for o in out])
-                out_arr = np.zeros((ml, self.minibatch_size, out[-1].shape[-1])).astype("float32")
-                text_mask_arr = np.zeros((ml, self.minibatch_size)).astype("float32")
-                audio_mask_arr = np.zeros((ml, self.minibatch_size)).astype("float32")
-                for i in range(self.minibatch_size):
-                    oi = out[i]
-                    out_arr[:len(oi), i, :] = oi
-                    text_mask_arr[:len(oi), i] = 1.
-                    audio_mask_arr[:len(oi), i] = 1.
-                return (out_arr[:, :, :self.n_text_features],
-                        out_arr[:, :, self.n_text_features:],
-                        text_mask_arr, audio_mask_arr)
+                raise ValueError("UNSUPPORTED")
             elif self.itr_type == "unaligned_phonemes" or self.itr_type == "unaligned_text":
                 mtl = max([len(o[0]) for o in out])
                 mal = max([len(o[1]) for o in out])
@@ -743,6 +376,7 @@ class masked_synthesis_sequence_iterator(object):
                     for n, j in enumerate(text_i):
                         text_arr[n, i, j] = 1.
                     text_mask_arr[:len(text_i), i] = 1.
+                self.n_iterations_seen_ += 1
                 return text_arr, audio_arr, text_mask_arr, audio_mask_arr
         except StopIteration:
             self.reset(internal_reset=True)

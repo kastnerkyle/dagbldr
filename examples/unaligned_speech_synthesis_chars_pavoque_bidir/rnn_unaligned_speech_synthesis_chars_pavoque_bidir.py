@@ -266,17 +266,9 @@ fit_function = theano.function(in_args, out_args, updates=updates)
 cost_function = theano.function(in_args, out_args)
 predict_function = theano.function(in_args, pred_out_args)
 
-last_decrease_epoch = 0
-epoch_noise_trigger = 5
-logger = get_logger()
+n_epochs = 150
 
 def train_loop(itr):
-    global train_noise_pwr
-    global last_decrease_epoch
-    if (itr.n_epochs_seen_ - last_decrease_epoch) >= epoch_noise_trigger:
-        last_decrease_epoch = itr.n_epochs_seen_
-        train_noise_pwr = max([train_noise_pwr - 1., 1.])
-        logger.info("Train noise pwr set to %s" % str(train_noise_pwr))
     X_mb, y_mb, X_mask, y_mask = next(itr)
     y_mb = np.concatenate((0. * y_mb[0, :, :][None], y_mb))
     y_mask = np.concatenate((1. * y_mask[0, :][None], y_mask))
@@ -301,7 +293,7 @@ checkpoint_dict = create_checkpoint_dict(locals())
 
 TL = TrainingLoop(train_loop, train_itr,
                   valid_loop, valid_itr,
-                  n_epochs=50,
+                  n_epochs=n_epochs,
                   checkpoint_every_n_epochs=1,
                   checkpoint_every_n_seconds=15 * 60,
                   checkpoint_dict=checkpoint_dict,

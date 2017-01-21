@@ -99,7 +99,7 @@ if ext == "pkl":
     all_attention = []
 
     # Surely 40 samples is enough for anyone...
-    n_rounds = 5
+    n_rounds = 1
 
     for n in range(n_rounds):
         X_mb, y_mb, X_mb_mask, y_mb_mask = next(valid_itr)
@@ -121,10 +121,11 @@ if ext == "pkl":
         w_res = np.zeros((sample_length, minibatch_size, n_ctx_ins)).astype("float32")
         inmask = np.ones_like(res[:, :, 0])
         noise_pwr = 0.
-        for i in range(2, sample_length):
+        pre = 2
+        for i in range(pre, sample_length):
             print("Round %i, Iteration %i" % (n, i))
-            r = predict_function(X_mb, res[i - 2:i],
-                                 X_mb_mask, inmask[i - 2:i],
+            r = predict_function(X_mb, res[i - pre:i],
+                                 X_mb_mask, inmask[i - pre:i],
                                  #y_mb[i - 2:i], inmask[i - 2:i],
                                  i_enc_h1, i_enc_h1_r,
                                  i_h1, i_h2, i_h3, i_k1, i_w1, noise_pwr)
@@ -142,7 +143,7 @@ if ext == "pkl":
                 res[i, :, :] = y_mb[i]
             else:
                 res[i, :, :] = y_p
-            w_res[i, :, :] = o_w1
+            w_res[i, :, :] = o_w1[-1]
             #i_enc_h1 never changes
             #i_enc_h1_r never changes
             i_h1, i_h2, i_h3 = (o_h1[-1], o_h2[-1], o_h3[-1])
