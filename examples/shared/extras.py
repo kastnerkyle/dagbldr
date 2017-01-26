@@ -317,7 +317,11 @@ class masked_synthesis_sequence_iterator(object):
                 txt = [di for di in str(d["text"])]
                 if self.extra_options == "lower":
                     txt = [ti.lower() for ti in txt]
-                txt = np.array([self._lu[ti] for ti in txt])
+                if all([ti in self._lu.keys() for ti in txt]):
+                    txt = np.array([self._lu[ti] for ti in txt])
+                else:
+                    print("WARNING: Some keys not found in lookup, skipping them!")
+                    txt = np.array([self._lu[ti] for ti in txt if ti in self._lu.keys()])
                 return (txt, d["audio_features"])
             else:
                 return np.hstack((d["text_features"], d["audio_features"]))
