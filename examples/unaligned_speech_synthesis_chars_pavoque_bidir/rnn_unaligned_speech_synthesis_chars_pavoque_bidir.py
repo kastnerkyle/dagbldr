@@ -74,22 +74,29 @@ train_itr.reset()
 n_text_ins = X_mb.shape[-1]
 n_audio_ins = y_mb.shape[-1]
 n_audio_outs = y_mb.shape[-1]
-n_ctx_ins = n_hid
+n_ctx_ins = 2 * n_hid
 att_dim = 20
 train_noise_pwr = 4.
 valid_noise_pwr = 0.
 
 """
-from extras import generate_merlin_wav
-
-import numpy as np
-a = np.load("/Tmp/kastner/vctk_American_speakers/numpy_features/p294_010.npz")
-generate_merlin_wav(a["audio_features"], do_post_filtering=False)
-raise ValueError()
-
-y_itf = train_itr.inverse_transform(y_mb)
-generate_merlin_wav(y_itf[:, 0, :], do_post_filtering=False)
-raise ValueError()
+x_tot = 0
+y_tot = 0
+try:
+    while True:
+        X_mb, y_mb, X_mb_mask, y_mb_mask = next(train_itr)
+        for i in range(X_mb.shape[1]):
+            x = X_mb_mask[:, i]
+            y = y_mb_mask[:, i]
+            x = x[x != 0]
+            y = y[y != 0]
+            x_tot += len(x)
+            y_tot += len(y)
+except:
+    ratio = float(x_tot) / float(y_tot)
+    print(ratio)
+    from IPython import embed; embed()
+    raise ValueError()
 """
 
 train_enc_h1_init = np.zeros((minibatch_size, n_hid)).astype("float32")
@@ -177,37 +184,9 @@ def encoder_step(in_t, mask_t, in_r_t, mask_r_t, h1_tm1, h1_r_tm1):
                           sequences=[X_sym, X_mask_sym, X_sym[::-1], X_mask_sym[::-1]],
                           outputs_info=[enc_h1_0, enc_h1_r_0])
 
-enc_ctx = enc_h1 + enc_h1_r #tensor.concatenate((enc_h1, enc_h1_r[::-1]), axis=2)
-'''
+enc_ctx = tensor.concatenate((enc_h1, enc_h1_r[::-1]), axis=2)
 
-def encoder_step(in_t, mask_t, h1_tm1):
-    enc_h1_fork = gru_fork([in_t], [n_text_ins], n_hid,
-                           name="enc_h1_fork",
-                           random_state=random_state, init_func=init)
-    enc_h1_t = gru(enc_h1_fork, h1_tm1, [n_hid], n_hid, mask=mask_t, name="enc_h1",
-                   random_state=random_state, init_func=init)
-    return enc_h1_t
-
-
-enc_h1, _ = theano.scan(encoder_step,
-                          sequences=[X_sym, X_mask_sym],
-                          outputs_info=[enc_h1_0])
-
-enc_ctx = enc_h1 #+ enc_h1_r #tensor.concatenate((enc_h1, enc_h1_r[::-1]), axis=2)
-'''
-
-# English
-# average characters per word 4.7, average words per minute 133
-# 625.1 characters per minute
-# 625.1 * .9 (90% speaking rate)
-# 562.59 / 60 characters per second
-# 9.3765 characters per second
-# 0.1 seconds per character
-# 5ms per output step = 0.005s
-# .005 s per step * 9.3765 chars per secon
-# 0.047
-
-average_step = 0.05
+average_step = 0.0545
 #min_step = .9 * average_step
 #max_step = 1.25 * average_step
 def step(in_t, mask_t, h1_tm1, h2_tm1, h3_tm1, k_tm1, w_tm1,
@@ -266,7 +245,7 @@ fit_function = theano.function(in_args, out_args, updates=updates)
 cost_function = theano.function(in_args, out_args)
 predict_function = theano.function(in_args, pred_out_args)
 
-n_epochs = 150
+n_epochs = 120
 
 def train_loop(itr):
     X_mb, y_mb, X_mask, y_mask = next(itr)
@@ -294,8 +273,8 @@ checkpoint_dict = create_checkpoint_dict(locals())
 TL = TrainingLoop(train_loop, train_itr,
                   valid_loop, valid_itr,
                   n_epochs=n_epochs,
-                  checkpoint_every_n_epochs=1,
-                  checkpoint_every_n_seconds=15 * 60,
+                  checkpoint_every_n_epochs=10,
+                  checkpoint_every_n_seconds=60 * 60,
                   checkpoint_dict=checkpoint_dict,
                   skip_minimums=True)
 epoch_results = TL.run()
