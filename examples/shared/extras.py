@@ -11,6 +11,7 @@ import h5py
 english_charset = ['\t', '!', ' ', "'", '-', ',', '.', '?', 'A', 'C', 'B', 'E', 'D', 'G', 'F', 'I', 'H', 'K', 'J', 'M', 'L', 'O', 'N', 'Q', 'P', 'S', 'R', 'U', 'T', 'W', 'V', 'Y', 'Z', 'a', '`', 'c', 'b', 'e', 'd', 'g', 'f', 'i', 'h', 'k', 'j', 'm', 'l', 'o', 'n', 'q', 'p', 's', 'r', 'u', 't', 'w', 'v', 'y', 'x', 'z']
 german_charset = ['\x87', '\x93', '\x99', '\x9b', '\x9f', '\xa1', ' ', '\xa7', '\xa9', '(', '\xad', ',', '.', '\xb3', ':', '\xc3', 'B', '\xc5', 'D', 'F', 'H', 'J', 'L', 'N', 'P', 'R', 'T', 'V', 'X', 'Z', 'b', 'd', 'f', 'h', 'j', 'l', 'n', 'p', 'r', 't', 'v', 'x', 'z', '\x80', '\x84', '\x8e', '\x96', '\x9c', '\x9e', '!', '\xa0', '\xa2', '\xa4', "'", ')', '\xa8', '\xaa', '-', '/', '1', '\xb4', '\xb6', ';', '\xbc', '?', 'A', 'C', '\xc2', 'E', '\xc4', 'G', 'I', 'K', 'M', 'O', 'Q', 'S', 'U', 'W', 'Y', 'a', 'c', '\xe2', 'e', 'g', 'i', 'k', 'm', 'o', 'q', 's', 'u', 'w', 'y']
 romanian_charset = [' ', ',', '.', '?', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'R', 'S', 'T', 'U', 'V', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '\x83', '\x8e', '\x9e', '\x9f', '\xa2', '\xa3', '\xae', '\xc3', '\xc4', '\xc5']
+arabic_charset = [' ', '$', '&', "'", '*', '-', '.', '<', '>', 'A', 'D', 'E', 'F', 'H', 'K', 'N', 'S', 'T', 'Y', 'Z', '^', 'a', 'b', 'd', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'w', 'x', 'y', 'z', '|', '}', '~']
 
 def copytree(src, dst, symlinks=False, ignore=None):
     if not os.path.exists(dst):
@@ -288,7 +289,7 @@ class masked_synthesis_sequence_iterator(object):
             raise AttributeError("Unknown itr_type %s, allowable types %s" % (itr_type, allowed_itr_types))
 
         allowed_class_sets = ["english_chars", "german_chars",
-                              "romanian_chars"]
+                              "romanian_chars", "arabic_chars"]
         if self.class_set not in allowed_class_sets:
             raise ValueError("class_set argument %s not currently supported!" % class_set,
                              "Allowed types are %s" % str(allowed_class_sets))
@@ -299,6 +300,8 @@ class masked_synthesis_sequence_iterator(object):
             cs = german_charset
         elif self.class_set == "romanian_chars":
             cs = romanian_charset
+        elif self.class_set == "arabic_chars":
+            cs = arabic_charset
 
         if self.extra_options == "lower":
             cs = list(set([csi.lower() for csi in cs]))
