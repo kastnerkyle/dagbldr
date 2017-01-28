@@ -1869,8 +1869,12 @@ def run_loop(train_loop_function, train_itr,
                 if "this_epoch_train_mean_auto" in this_keys:
                     checkpoint_dict["zoom_train_trace_epoch_mean_%i_auto" % e_i] = this_results_dict["this_epoch_train_mean_auto"]
 
+                all_zoom_keys = [ck for ck in checkpoint_dict.keys()
+                                 if "zoom_" in ck]
                 zoom_keys = [ck for ck in checkpoint_dict.keys()
-                             if "zoom_" in ck]
+                             if (("zoom_" in ck)
+                                 and ("epoch_mean" not in ck)
+                                 and ("epoch_%s" % e_i not in ck))]
 
                 # keep traces with:
                 # overall min
@@ -1949,8 +1953,18 @@ def run_loop(train_loop_function, train_itr,
 
                     rev_matched = {v: k for k, v in matched_keys.items()}
                     keep_keys = rev_matched.keys()
-                    delete_keys = [zk for zk in zoom_keys if zk not in keep_keys]
-                    for zk in zoom_keys:
+                    keep_epochs = [int(kk.split("_")[-2]) for kk in keep_keys]
+                    keep_epochs = keep_epochs + [e_i]
+
+                    delete_keys = []
+                    for azk in all_zoom_keys:
+                        if any(["_%i_" % ke in azk for ke in keep_epochs]):
+                            continue
+                        else:
+                            delete_keys.append(azk)
+
+                    keep_keys = [azk for azk in all_zoom_keys if azk not in delete_keys]
+                    for zk in all_zoom_keys:
                         if zk in keep_keys:
                             # could add logic to change name
                             pass
