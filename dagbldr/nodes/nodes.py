@@ -5,7 +5,9 @@ from scipy import linalg
 from scipy.misc import factorial
 import theano
 from theano import tensor
-from theano.tensor.signal.downsample import max_pool_2d
+from theano.tensor.signal import pool
+max_pool_2d = pool.pool_2d
+#from theano.tensor.signal.downsample import max_pool_2d
 from theano.sandbox.rng_mrg import MRG_RandomStreams
 from ..utils import concatenate, as_shared
 from ..core import get_name, set_shared, get_shared
