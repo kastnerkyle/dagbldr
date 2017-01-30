@@ -364,7 +364,7 @@ def find_dagbldr_lookup_file():
         os.mkdir(lookup_path)
 
     # onetime hook to bootstrap for dev
-    #write_dagbldr_lookup_file()
+    # write_dagbldr_lookup_file()
 
     self_name = get_script()
     self_full_path = os.path.abspath(self_name) + ".py"
@@ -2271,6 +2271,7 @@ def run_loop(train_loop_function, train_itr,
                             (weights_save_path, copy_dict),
                             (checkpoint_save_path, copy_dict)))
                     # TODO: Make this better at handling time vs forced
+                    # using somehting besides hardcoded force_latest.pkl
                     write_dagbldr_lookup_file()
                     logger.info("Force checkpointing complete.")
 
