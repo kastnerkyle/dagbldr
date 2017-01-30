@@ -1591,7 +1591,6 @@ def threaded_timed_writer(sleep_time=15 * 60, tag=None):
                             save_weights(weights_save_path, items_dict,
                                          latest_tag=tag)
                         if checkpoint_tup is not None:
-                            write_dagbldr_lookup_file()
                             checkpoint_save_path, pickle_item = checkpoint_tup
                             save_checkpoint(checkpoint_save_path, pickle_item,
                                             latest_tag=tag)
@@ -2271,6 +2270,8 @@ def run_loop(train_loop_function, train_itr,
                             (results_save_path, this_results_dict),
                             (weights_save_path, copy_dict),
                             (checkpoint_save_path, copy_dict)))
+                    # TODO: Make this better at handling time vs forced
+                    write_dagbldr_lookup_file()
                     logger.info("Force checkpointing complete.")
 
                 checkpoint_stop = time.time()
