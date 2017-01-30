@@ -17,6 +17,8 @@ try:
 except ImportError:
     import pickle
 
+import json
+
 
 def _dumps(arg):
    # paranoia
@@ -69,6 +71,59 @@ def get_logger():
     Fetch the global dagbldr logger.
     """
     return logger
+
+
+def copytree(src, dst, symlinks=False, ignore=None):
+    if not os.path.exists(dst):
+        os.makedirs(dst)
+        shutil.copystat(src, dst)
+    lst = os.listdir(src)
+    if ignore:
+        excl = ignore(src, lst)
+        lst = [x for x in lst if x not in excl]
+    for item in lst:
+        s = os.path.join(src, item)
+        d = os.path.join(dst, item)
+        if symlinks and os.path.islink(s):
+            if os.path.lexists(d):
+                os.remove(d)
+            os.symlink(os.readlink(s), d)
+            try:
+                st = os.lstat(s)
+                mode = stat.S_IMODE(st.st_mode)
+                os.lchmod(d, mode)
+            except:
+                pass  # lchmod not available
+        elif os.path.isdir(s):
+            copytree(s, d, symlinks, ignore)
+        else:
+            shutil.copy2(s, d)
+
+def pwrap(args, shell=False):
+    p = subprocess.Popen(args, shell=shell, stdout=subprocess.PIPE,
+                         stdin=subprocess.PIPE, stderr=subprocess.PIPE,
+                         universal_newlines=True)
+    return p
+
+# Print output
+# http://stackoverflow.com/questions/4417546/constantly-print-subprocess-output-while-process-is-running
+def execute(cmd, shell=False):
+    popen = pwrap(cmd, shell=shell)
+    for stdout_line in iter(popen.stdout.readline, ""):
+        yield stdout_line
+
+    popen.stdout.close()
+    return_code = popen.wait()
+    if return_code:
+        raise subprocess.CalledProcessError(return_code, cmd)
+
+
+def pe(cmd, shell=False):
+    """
+    Print and execute command on system
+    """
+    for line in execute(cmd, shell=shell):
+        print(line, end="")
 
 
 FINALIZE_TRAINING = False
@@ -245,9 +300,159 @@ def _special_check(verbose=True):
         return False
 
 
+def get_dagbldr_lookup_filepath():
+    return os.getenv("DAGBLDR_LOOKUP", os.path.join(
+        os.path.expanduser("~"), "dagbldr_lookup"))
+
+
+def _hash_file(fpath):
+    with open(fpath, "r") as f:
+        l = f.readlines()
+
+    hsh = None
+    for li in l:
+        if hsh is None:
+            hsh = hash(tuple(l))
+        else:
+            hsh ^= hash(tuple(l))
+    return hsh
+
+
+def write_dagbldr_lookup_file(script_path=None):
+    gcu = get_checkpoint_uuid()
+    gcit = get_checkpoint_import_time()
+    hostname = socket.gethostname()
+    lookup_path = get_dagbldr_lookup_filepath()
+    if script_path is None:
+        script_name = get_script()
+        full_script_path = os.path.abspath(script_name) + ".py"
+    else:
+        # this edge case only for making new lookups. Not recommended
+        script_name = script_path.split(os.sep)[-1][:-3]
+        full_script_path = script_path
+
+    hsh = _hash_file(full_script_path)
+
+    info_dict = {}
+    info_dict["name"] = script_name
+    info_dict["run_path"] = full_script_path
+    info_dict["hostname"] = hostname
+    info_dict["uuid"] = gcu
+    info_dict["import_time"] = gcit
+    info_dict["script_hash"] = hsh
+
+    save_path = os.path.join(lookup_path, "%s_%s.json" % (gcu, script_name))
+    logger.info("Saving dagbldr lookup in %s" % save_path)
+    with open(save_path, "w") as f:
+        json.dump(info_dict, f)
+
+
+def read_dagbldr_lookup_file(fpath):
+    with open(fpath, "r") as f:
+        info = json.load(f)
+    return info
+
+
+def find_dagbldr_lookup_file():
+    # side effects, will set the dagbldr global uuid to whatever it finds if
+    # matching!
+    lookup_path = get_dagbldr_lookup_filepath()
+
+    if not os.path.exists(lookup_path):
+        logger.info("dagbldr lookup folder not found at %s, creating..." % lookup_path)
+        os.mkdir(lookup_path)
+
+    # onetime hook to bootstrap for dev
+    # write_dagbldr_lookup_file()
+
+    self_name = get_script()
+    self_full_path = os.path.abspath(self_name) + ".py"
+    self_hash = _hash_file(self_full_path)
+    matches = []
+    for fi in os.listdir(lookup_path):
+        lu_path = os.path.join(lookup_path, fi)
+        res = read_dagbldr_lookup_file(lu_path)
+        if res["script_hash"] == self_hash:
+            logger.info("magic_reload match found at %s, reloading weights and stats" % lu_path)
+            matches.append(res)
+    if len(matches) > 1:
+        logger.info("Multiple magic_reload matches found, using most recent")
+        best_offset = 2000000000000000
+        # convert then unconvert to avoid timezone issues
+        current_time = time.strftime("%H-%M-%S_%Y-%d-%m", time.gmtime())
+        current_time = time.strptime(current_time, "%H-%M-%S_%Y-%d-%m")
+        current_time = time.mktime(current_time)
+
+        for n, m in enumerate(matches):
+            # this doesn't account for dst or any other nonsense
+            checkpoint_import_time = time.strptime(m["import_time"], "%H-%M-%S_%Y-%d-%m")
+            ce_time = time.mktime(checkpoint_import_time)
+            offset = abs(current_time - ce_time)
+            if offset < best_offset:
+                best_offset = offset
+                best_match = matches[n]
+    elif len(matches) == 1:
+        best_match = matches[0]
+    else:
+        logger.info("No magic_reload matches found")
+        # 0 matches
+        return None
+    # fetch the matched checkpoint
+    # currently (see filepath maker in archive_dagbldr
+    # name + "_" + time + "_" + uuid
+    checkpoint_dir = os.getenv("DAGBLDR_MODELS", os.path.join(
+        os.path.expanduser("~"), "dagbldr_models"))
+
+    # Figure out if this is necessary to run on localdisk @ U de M
+    if _special_check():
+        checkpoint_dir = "/Tmp/kastner/dagbldr_models"
+
+    cached_machine = best_match["hostname"]
+    cached_name = best_match["name"]
+    cached_runpath = best_match["run_path"]
+    cached_time = best_match["import_time"]
+    cached_uuid = best_match["uuid"]
+    cached_folder = cached_name + "_" + cached_time + "_" + cached_uuid
+    cached_dir = checkpoint_dir
+    cached_path = cached_dir + str(os.sep) + cached_folder
+    if cached_path[-1] != str(os.sep):
+        cached_path += str(os.sep)
+    logger.info("Using best match stored on %s, from %s" % (cached_machine, cached_path))
+
+    # for now use force_latest.pkl
+    to_use = "force_latest.pkl"
+    cached_pkl = cached_path + to_use
+    local_cache_dir = "/Tmp/kastner/dagbldr_cache/"
+    if not os.path.exists(local_cache_dir):
+        os.mkdir(local_cache_dir)
+    local_cache = local_cache_dir + "%s_%s" % (cached_uuid, to_use)
+    cmd_string = "rsync -vh --copy-links --progress %s:%s %s" % (cached_machine, cached_pkl, local_cache)
+    logger.info("Fetching using fetch command '%s'" % cmd_string)
+    pe(cmd_string, shell=True)
+    with open(local_cache, "rb") as f:
+        loaded_cd = pickle.load(f)
+    return loaded_cd
+
+
 # decided at import, should be consistent over training
 checkpoint_uuid = get_name()[:6]
+def get_checkpoint_uuid():
+    return checkpoint_uuid
+
+def set_checkpoint_uuid(uuid_str):
+    global checkpoint_uuid
+    checkpoint_uuid = uuid_str
+
 checkpoint_import_time = time.strftime("%H-%M-%S_%Y-%d-%m", time.gmtime())
+def get_checkpoint_import_time():
+    return checkpoint_import_time
+
+
+def set_checkpoint_import_time(time_str):
+    global checkpoint_import_time
+    checkpoint_import_time = time_str
+
+
 def get_checkpoint_dir(checkpoint_dir=None, folder=None, create_dir=True):
     """ Get checkpoint directory path """
     if checkpoint_dir is None:
@@ -260,6 +465,8 @@ def get_checkpoint_dir(checkpoint_dir=None, folder=None, create_dir=True):
 
     if folder is None:
         checkpoint_name = get_script()
+        checkpoint_import_time = get_checkpoint_import_time()
+        checkpoint_uuid = get_checkpoint_uuid()
         tmp = checkpoint_dir + os.path.sep + checkpoint_name + "_" + checkpoint_import_time  + "_" + checkpoint_uuid
         checkpoint_dir = tmp
     else:
@@ -1051,6 +1258,7 @@ def archive(tag=None):
         save_script_path = os.path.join(save_path, tag + "_" + get_script_name())
 
     logger.info("Saving code archive for %s" % (save_path))
+
     script_location = os.path.abspath(sys.argv[0])
     shutil.copy2(script_location, save_script_path)
 
@@ -1508,7 +1716,6 @@ def run_loop(train_loop_function, train_itr,
              skip_n_train_minibatches=-1,
              stateful_object=None):
     """
-    TODO: add all logging info into the js report
     TODO: add upload fields to add data to an html and save a copy
     loop function should return a list of costs
     stateful_object allows to serialize and relaunch in middle of an epoch
@@ -1556,8 +1763,12 @@ def run_loop(train_loop_function, train_itr,
                         "joint_times_auto",
                         "train_checkpoint_auto",
                         "valid_checkpoint_auto"]
+        extra_keys = [k for k in checkpoint_dict.keys() if "zoom_" in k]
+        extra_keys += ["epoch_count_auto"]
         not_handled = [k for k in checkpoint_dict.keys()
-                       if k not in keys_checked and k not in ignore_keys]
+                       if k not in keys_checked
+                       and k not in extra_keys
+                       and k not in ignore_keys]
         if len(not_handled) > 0:
             raise ValueError("Unhandled keys %s in checkpoint_dict, exiting..." % not_handled)
 
@@ -1590,9 +1801,10 @@ def run_loop(train_loop_function, train_itr,
         overall_checkpoint_deltas = [0]
         overall_joint_times = [0]
         overall_joint_deltas = [0]
-
         start_epoch = 0
 
+    # check that the lookup file exists
+    find_dagbldr_lookup_file()
     # save current state of lib and calling script
     archive_dagbldr()
     script = get_script()

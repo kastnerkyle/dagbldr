@@ -5,14 +5,20 @@ import numpy as np
 import theano
 from theano import tensor
 from collections import OrderedDict
+import os
 
 from ..core import safe_zip
 from ..core import get_type
 from ..core import get_file_matches
 from ..core import get_checkpoint_dir
 from ..core import dunpickle
+from ..core import get_shared_variables_from_function
+from ..core import get_values_from_function
 from ..core import set_shared_variables_in_function
 from ..core import get_lib_shared_params
+from ..core import find_dagbldr_lookup_file
+from ..core import write_dagbldr_lookup_file
+from ..core import in_nosetest
 
 _type = get_type()
 
@@ -87,7 +93,7 @@ def path_between_points(start, stop, n_steps=100, dtype=theano.config.floatX):
     return steps.astype(dtype)
 
 
-def create_checkpoint_dict(lcls):
+def create_checkpoint_dict(lcls, magic_reload=True):
     """
     Create checkpoint dict that contains all local theano functions
 
@@ -99,6 +105,9 @@ def create_checkpoint_dict(lcls):
     lcls : dict
         A dictionary containing theano.function instances, normally the
         result of locals()
+
+    magic_reload : bool, default True
+       Whether or not to use "magic reloading", using dagbldr model lookups.
 
     Returns
     -------
@@ -113,10 +122,23 @@ def create_checkpoint_dict(lcls):
             checkpoint_dict[k] = v
     if len(checkpoint_dict.keys()) == 0:
         raise ValueError("No theano functions in lcls!")
+
+    if magic_reload:
+        # magic will look in ~/dagbldr_lookup , seek out the appropriate saved
+        # function, then reload it
+        reload_cd = find_dagbldr_lookup_file()
+        for k, v in reload_cd.items():
+            if isinstance(v, theano.compile.function_module.Function):
+                old_weights = get_values_from_function(v)
+                set_shared_variables_in_function(checkpoint_dict[k], old_weights)
+            else:
+                checkpoint_dict[k] = v
+        del reload_cd
     return checkpoint_dict
 
 
 def create_or_continue_from_checkpoint_dict(lcls, append_name="best"):
+    raise ValueError("Deprecated")
     """
     Create or load a checkpoint dict that contains all local theano functions
 
