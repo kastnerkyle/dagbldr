@@ -127,13 +127,14 @@ def create_checkpoint_dict(lcls, magic_reload=True):
         # magic will look in ~/dagbldr_lookup , seek out the appropriate saved
         # function, then reload it
         reload_cd = find_dagbldr_lookup_file()
-        for k, v in reload_cd.items():
-            if isinstance(v, theano.compile.function_module.Function):
-                old_weights = get_values_from_function(v)
-                set_shared_variables_in_function(checkpoint_dict[k], old_weights)
-            else:
-                checkpoint_dict[k] = v
-        del reload_cd
+        if reload_cd is not None:
+            for k, v in reload_cd.items():
+                if isinstance(v, theano.compile.function_module.Function):
+                    old_weights = get_values_from_function(v)
+                    set_shared_variables_in_function(checkpoint_dict[k], old_weights)
+                else:
+                    checkpoint_dict[k] = v
+            del reload_cd
     return checkpoint_dict
 
 

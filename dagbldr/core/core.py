@@ -65,6 +65,7 @@ formatter = logging.Formatter('%(message)s<br>')
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
+USER = os.getenv('USER')
 
 def get_logger():
     """
@@ -363,7 +364,7 @@ def find_dagbldr_lookup_file():
         os.mkdir(lookup_path)
 
     # onetime hook to bootstrap for dev
-    # write_dagbldr_lookup_file()
+    #write_dagbldr_lookup_file()
 
     self_name = get_script()
     self_full_path = os.path.abspath(self_name) + ".py"
@@ -405,7 +406,7 @@ def find_dagbldr_lookup_file():
 
     # Figure out if this is necessary to run on localdisk @ U de M
     if _special_check():
-        checkpoint_dir = "/Tmp/kastner/dagbldr_models"
+        checkpoint_dir = "/Tmp/" + USER + "/dagbldr_models"
 
     cached_machine = best_match["hostname"]
     cached_name = best_match["name"]
@@ -422,7 +423,7 @@ def find_dagbldr_lookup_file():
     # for now use force_latest.pkl
     to_use = "force_latest.pkl"
     cached_pkl = cached_path + to_use
-    local_cache_dir = "/Tmp/kastner/dagbldr_cache/"
+    local_cache_dir = "/Tmp/" + USER + "/dagbldr_cache/"
     if not os.path.exists(local_cache_dir):
         os.mkdir(local_cache_dir)
     local_cache = local_cache_dir + "%s_%s" % (cached_uuid, to_use)
@@ -431,6 +432,7 @@ def find_dagbldr_lookup_file():
     pe(cmd_string, shell=True)
     with open(local_cache, "rb") as f:
         loaded_cd = pickle.load(f)
+    set_checkpoint_uuid(cached_uuid)
     return loaded_cd
 
 
@@ -440,6 +442,7 @@ def get_checkpoint_uuid():
     return checkpoint_uuid
 
 def set_checkpoint_uuid(uuid_str):
+    logger.info("Setting global dagbldr uuid to %s" % uuid_str)
     global checkpoint_uuid
     checkpoint_uuid = uuid_str
 
@@ -449,6 +452,7 @@ def get_checkpoint_import_time():
 
 
 def set_checkpoint_import_time(time_str):
+    logger.info("Setting global dagbldr import time to %s" % time_str)
     global checkpoint_import_time
     checkpoint_import_time = time_str
 
@@ -461,7 +465,7 @@ def get_checkpoint_dir(checkpoint_dir=None, folder=None, create_dir=True):
 
         # Figure out if this is necessary to run on localdisk @ U de M
         if _special_check():
-            checkpoint_dir = "/Tmp/kastner/dagbldr_models"
+            checkpoint_dir = "/Tmp/" + USER + "/dagbldr_models"
 
     if folder is None:
         checkpoint_name = get_script()
@@ -1234,7 +1238,7 @@ def get_resource_dir(name, resource_dir=None, folder=None, create_dir=True):
     # Only used for JS downloader
     if not resource_dir:
         if _special_check(False):
-            resource_dir = str(os.path.sep) + "Tmp" + str(os.path.sep) + os.environ["USER"] + str(os.path.sep) + "dagbldr_models"
+            resource_dir = str(os.path.sep) + "Tmp" + str(os.path.sep) + USER + str(os.path.sep) + "dagbldr_models"
         else:
             resource_dir = os.getenv("DAGBLDR_MODELS", os.path.join(
                 os.path.expanduser("~"), "dagbldr_models"))
@@ -1587,6 +1591,7 @@ def threaded_timed_writer(sleep_time=15 * 60, tag=None):
                             save_weights(weights_save_path, items_dict,
                                          latest_tag=tag)
                         if checkpoint_tup is not None:
+                            write_dagbldr_lookup_file()
                             checkpoint_save_path, pickle_item = checkpoint_tup
                             save_checkpoint(checkpoint_save_path, pickle_item,
                                             latest_tag=tag)
@@ -1803,7 +1808,7 @@ def run_loop(train_loop_function, train_itr,
         overall_joint_deltas = [0]
         start_epoch = 0
 
-    # check that the lookup file exists
+    # check that the lookup folder exists
     find_dagbldr_lookup_file()
     # save current state of lib and calling script
     archive_dagbldr()
