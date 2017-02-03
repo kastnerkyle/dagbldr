@@ -18,6 +18,7 @@ except ImportError:
     import pickle
 
 import json
+import hashlib
 
 
 def _dumps(arg):
@@ -307,16 +308,15 @@ def get_dagbldr_lookup_filepath():
 
 
 def _hash_file(fpath):
-    with open(fpath, "r") as f:
-        l = f.readlines()
+    assert os.path.exists(fpath)
 
-    hsh = None
-    for li in l:
-        if hsh is None:
-            hsh = hash(tuple(l))
-        else:
-            hsh ^= hash(tuple(l))
-    return hsh
+    def md5(fname):
+        hash_md5 = hashlib.md5()
+        with open(fname, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_md5.update(chunk)
+        return hash_md5.hexdigest()
+    return str(md5(fpath))
 
 
 def write_dagbldr_lookup_file(script_path=None):
@@ -373,7 +373,7 @@ def find_dagbldr_lookup_file():
     for fi in os.listdir(lookup_path):
         lu_path = os.path.join(lookup_path, fi)
         res = read_dagbldr_lookup_file(lu_path)
-        if res["script_hash"] == self_hash:
+        if str(res["script_hash"]).strip() == self_hash:
             logger.info("magic_reload match found at %s, reloading weights and stats" % lu_path)
             matches.append(res)
     if len(matches) > 1:

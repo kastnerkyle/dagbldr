@@ -23,6 +23,19 @@ from ..core import in_nosetest
 _type = get_type()
 
 
+def numpy_one_hot(labels_dense, n_classes):
+    """Convert class labels from scalars to one-hot vectors."""
+    labels_shape = labels_dense.shape
+    labels_dtype = labels_dense.dtype
+    labels_dense = labels_dense.ravel().astype("int32")
+    n_labels = labels_dense.shape[0]
+    labels_one_hot = np.zeros((n_labels, n_classes))
+    labels_one_hot[np.arange(n_labels).astype("int32"),
+                   labels_dense.ravel()] = 1
+    labels_one_hot = labels_one_hot.reshape(labels_shape+(n_classes,))
+    return labels_one_hot.astype(labels_dtype)
+
+
 def get_weights(accept_regex="_W", skip_regex="_softmax_"):
     """
     A regex matcher to get weights. To bypass, simply pass None.

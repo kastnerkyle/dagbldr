@@ -13,6 +13,7 @@ german_charset = ['\x87', '\x93', '\x99', '\x9b', '\x9f', '\xa1', ' ', '\xa7', '
 romanian_charset = [' ', ',', '.', '?', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'R', 'S', 'T', 'U', 'V', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '\x83', '\x8e', '\x9e', '\x9f', '\xa2', '\xa3', '\xae', '\xc3', '\xc4', '\xc5']
 arabic_charset = [' ', '$', '&', "'", '*', '-', '.', '<', '>', 'A', 'D', 'E', 'F', 'H', 'K', 'N', 'S', 'T', 'Y', 'Z', '^', 'a', 'b', 'd', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'w', 'x', 'y', 'z', '|', '}', '~']
 french_charset = [' ', "'", ',', '-', '.', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '\xa0', '\xa2', '\xa7', '\xa8', '\xa9', '\xaa', '\xab', '\xae', '\xaf', '\xb4', '\xb9', '\xbb', '\xbc', '\xbf', '\xc3', '\xef']
+bangla_charset = [' ', "'", '.', ';', 'A', 'D', 'H', 'I', 'J', 'N', 'R', 'S', 'T', 'U', 'Y', '`', 'a', 'b', 'c', 'd', 'e', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'r', 's', 't', 'u', 'v', 'y', '~']
 
 def copytree(src, dst, symlinks=False, ignore=None):
     if not os.path.exists(dst):
@@ -141,6 +142,7 @@ class masked_synthesis_sequence_iterator(object):
                  itr_type="unaligned_text",
                  class_set="english_chars",
                  extra_options="lower",
+                 extra_ids=None,
                  randomize=False,
                  random_state=None):
         self.minibatch_size = minibatch_size
@@ -165,15 +167,26 @@ class masked_synthesis_sequence_iterator(object):
                 stop_index = stop_index
         else:
             stop_index = None
-        filename_list = sorted(filename_list)
-        filename_list = filename_list[start_index:stop_index]
+
+        if extra_ids is not None:
+            assert len(extra_ids) == len(filename_list)
+            sort_idx = sorted(range(len(filename_list)),
+                              key=filename_list.__getitem__)
+            extra_ids = [extra_ids[i] for i in sort_idx]
+            filename_list = [filename_list[i] for i in sort_idx]
+        else:
+            filename_list = sorted(filename_list)
+            filename_list = filename_list[start_index:stop_index]
         if (len(filename_list) % minibatch_size) != 0:
             new_len = len(filename_list) - len(filename_list) % minibatch_size
             filename_list = filename_list[:new_len]
+            if extra_ids is not None:
+                extra_ids = extra_ids
 
         self.start_index = start_index
         self.stop_index = stop_index
         self.filename_list = filename_list
+        self.extra_ids = extra_ids
 
         self.file_count = len(filename_list)
         self.n_audio_features = 63
@@ -273,13 +286,28 @@ class masked_synthesis_sequence_iterator(object):
             for i in s_to_l:
                 reordered_filename_list.append(self.filename_list[i])
 
+            if self.extra_ids is not None:
+                reordered_extra_ids = []
+                for i in s_to_l:
+                    reordered_extra_ids.append(self.extra_ids[i])
+
             # THIS TRUNCATES! Should already be handled by truncation in
             # filename splitting, but still something to watch out for
             reordered_splitlist = list(zip(*[iter(reordered_filename_list)] * self.minibatch_size))
-            self.random_state.shuffle(reordered_splitlist)
+
+            random_index = list(range(len(reordered_splitlist)))
+            self.random_state.shuffle(random_index)
+            reordered_splitlist = [reordered_splitlist[i] for i in random_index]
             reordered_filename_list = [item for sublist in reordered_splitlist
                                        for item in sublist]
             self.filename_list = reordered_filename_list
+
+            if self.extra_ids is not None:
+                reordered_ids_splitlist = list(zip(*[iter(reordered_extra_ids)] * self.minibatch_size))
+                reordered_ids_splitlist = [reordered_ids_splitlist[i] for i in random_index]
+                reordered_extra_ids = [item for sublist in reordered_ids_splitlist
+                                       for item in sublist]
+                self.extra_ids = reordered_extra_ids
 
         self._shuffle = reorder_assign
         self._shuffle()
@@ -290,7 +318,8 @@ class masked_synthesis_sequence_iterator(object):
             raise AttributeError("Unknown itr_type %s, allowable types %s" % (itr_type, allowed_itr_types))
 
         allowed_class_sets = ["english_chars", "german_chars",
-                              "romanian_chars", "arabic_chars", "french_chars"]
+                              "romanian_chars", "arabic_chars", "french_chars",
+                              "bangla_chars"]
         if self.class_set not in allowed_class_sets:
             raise ValueError("class_set argument %s not currently supported!" % class_set,
                              "Allowed types are %s" % str(allowed_class_sets))
@@ -305,6 +334,8 @@ class masked_synthesis_sequence_iterator(object):
             cs = arabic_charset
         elif self.class_set == "french_chars":
             cs = french_charset
+        elif self.class_set == "bangla_chars":
+            cs = bangla_charset
 
         if self.extra_options == "lower":
             cs = list(set([csi.lower() for csi in cs]))
@@ -362,6 +393,8 @@ class masked_synthesis_sequence_iterator(object):
             for i in range(self.minibatch_size):
                 fpath = self.filename_list[self._current_file_idx]
                 r = self._load_file(fpath)
+                if self.extra_ids is not None:
+                    r = (r[0], r[1], self.extra_ids[self._current_file_idx])
                 out.append(r)
                 self._current_file_idx += 1
                 self.current_file_ids_[i] = fpath
@@ -387,7 +420,11 @@ class masked_synthesis_sequence_iterator(object):
                         text_arr[n, i, j] = 1.
                     text_mask_arr[:len(text_i), i] = 1.
                 self.n_iterations_seen_ += 1
-                return text_arr, audio_arr, text_mask_arr, audio_mask_arr
+                if self.extra_ids is not None:
+                    ids = np.array([o[2] for o in out], dtype="int32")
+                    return text_arr, audio_arr, text_mask_arr, audio_mask_arr, ids
+                else:
+                    return text_arr, audio_arr, text_mask_arr, audio_mask_arr
         except StopIteration:
             self.reset(internal_reset=True)
             raise StopIteration("Stop index reached")

@@ -30,6 +30,7 @@ norm_info_file = "/Tmp/kastner/pavoque_all_speakers/norm_info/"
 # try with vctk??? at least the stats are probably close...
 # norm_info_file = "/Tmp/kastner/vctk_American_speakers/norm_info/"
 norm_info_file += "norm_info_mgc_lf0_vuv_bap_63_MVN.dat"
+fixed_sample_length = 1776
 
 files = [filedir + fs for fs in os.listdir(filedir)]
 files = [f for f in files if "neutral" in f]
@@ -74,7 +75,7 @@ train_itr.reset()
 n_text_ins = X_mb.shape[-1]
 n_audio_ins = y_mb.shape[-1]
 n_audio_outs = y_mb.shape[-1]
-n_ctx_ins = n_hid
+n_ctx_ins = 2 * n_hid
 att_dim = 20
 
 import argparse
@@ -116,7 +117,7 @@ if ext == "pkl":
         i_w1 = np.zeros((minibatch_size, n_ctx_ins)).astype("float32")
         i_k1 = np.zeros((minibatch_size, att_dim)).astype("float32")
 
-        sample_length = len(y_mb)
+        sample_length = fixed_sample_length
         res = np.zeros((sample_length, minibatch_size, y_mb.shape[-1])).astype("float32")
         w_res = np.zeros((sample_length, minibatch_size, n_ctx_ins)).astype("float32")
         inmask = np.ones_like(res[:, :, 0])
