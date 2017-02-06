@@ -29,10 +29,10 @@ common += common.lower()
 common += " "
 common += "'"
 # bangla specific...
-common += "~"
-common += "`"
-common += "."
-common += ";"
+#common += "~"
+#common += "`"
+#common += "."
+#common += ";"
 
 charset = set()
 for ni, nf in enumerate([i for i in os.listdir(numpy_features_dir) if ".npz" in i]):

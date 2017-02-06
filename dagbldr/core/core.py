@@ -120,12 +120,16 @@ def execute(cmd, shell=False):
         raise subprocess.CalledProcessError(return_code, cmd)
 
 
-def pe(cmd, shell=False):
+def pe(cmd, shell=False, verbose=True):
     """
     Print and execute command on system
     """
+    all_lines = []
     for line in execute(cmd, shell=shell):
-        print(line, end="")
+        if verbose:
+            print(line, end="")
+        all_lines.append(line.strip())
+    return all_lines
 
 
 FINALIZE_TRAINING = False
@@ -289,7 +293,7 @@ def convert_to_one_hot(itr, n_classes, dtype="int32"):
 def _special_check(verbose=True):
     ip_addr = socket.gethostbyname(socket.gethostname())
     subnet = ".".join(ip_addr.split(".")[:-1])
-    whitelist = ["132.204.24", "132.204.25", "132.204.26"]
+    whitelist = ["132.204.24", "132.204.25", "132.204.26", "132.204.27"]
     subnet_match = [subnet == w for w in whitelist]
     hostname = socket.gethostname()
     if any(subnet_match):
@@ -300,11 +304,6 @@ def _special_check(verbose=True):
         return True
     else:
         return False
-
-
-def get_dagbldr_lookup_filepath():
-    return os.getenv("DAGBLDR_LOOKUP", os.path.join(
-        os.path.expanduser("~"), "dagbldr_lookup"))
 
 
 def _hash_file(fpath):
@@ -323,7 +322,7 @@ def write_dagbldr_lookup_file(script_path=None):
     gcu = get_checkpoint_uuid()
     gcit = get_checkpoint_import_time()
     hostname = socket.gethostname()
-    lookup_path = get_dagbldr_lookup_filepath()
+    lookup_path = get_dagbldr_lookup_dir()
     if script_path is None:
         script_name = get_script()
         full_script_path = os.path.abspath(script_name) + ".py"
@@ -357,7 +356,7 @@ def read_dagbldr_lookup_file(fpath):
 def find_dagbldr_lookup_file():
     # side effects, will set the dagbldr global uuid to whatever it finds if
     # matching!
-    lookup_path = get_dagbldr_lookup_filepath()
+    lookup_path = get_dagbldr_lookup_dir()
 
     if not os.path.exists(lookup_path):
         logger.info("dagbldr lookup folder not found at %s, creating..." % lookup_path)
@@ -401,12 +400,7 @@ def find_dagbldr_lookup_file():
     # fetch the matched checkpoint
     # currently (see filepath maker in archive_dagbldr
     # name + "_" + time + "_" + uuid
-    checkpoint_dir = os.getenv("DAGBLDR_MODELS", os.path.join(
-        os.path.expanduser("~"), "dagbldr_models"))
-
-    # Figure out if this is necessary to run on localdisk @ U de M
-    if _special_check():
-        checkpoint_dir = "/Tmp/" + USER + "/dagbldr_models"
+    checkpoint_dir = get_dagbldr_models_dir()
 
     cached_machine = best_match["hostname"]
     cached_name = best_match["name"]
@@ -423,9 +417,7 @@ def find_dagbldr_lookup_file():
     # for now use force_latest.pkl
     to_use = "force_latest.pkl"
     cached_pkl = cached_path + to_use
-    local_cache_dir = "/Tmp/" + USER + "/dagbldr_cache/"
-    if not os.path.exists(local_cache_dir):
-        os.mkdir(local_cache_dir)
+
     local_cache = local_cache_dir + "%s_%s" % (cached_uuid, to_use)
     cmd_string = "rsync -vh --copy-links --progress %s:%s %s" % (cached_machine, cached_pkl, local_cache)
     logger.info("Fetching using fetch command '%s'" % cmd_string)
@@ -434,6 +426,125 @@ def find_dagbldr_lookup_file():
         loaded_cd = pickle.load(f)
     set_checkpoint_uuid(cached_uuid)
     return loaded_cd
+
+
+def create_checkpoint_dict(lcls, magic_reload=True):
+    """
+    Create checkpoint dict that contains all local theano functions
+
+    Example usage:
+        create_checkpoint_dict(locals())
+
+    Parameters
+    ----------
+    lcls : dict
+        A dictionary containing theano.function instances, normally the
+        result of locals()
+
+    magic_reload : bool, default True
+       Whether or not to use "magic reloading", using dagbldr model lookups.
+       This will replace the initialized weights with weights from
+       a previously saved model, either locally or remotely depending on the
+       entries in ~/dagbldr_lookup/*.json.
+
+    Returns
+    -------
+    checkpoint_dict : dict
+        A checkpoint dictionary suitable for passing to a training loop
+
+    """
+    print("Creating new checkpoint dictionary")
+    checkpoint_dict = {}
+    for k, v in lcls.items():
+        if isinstance(v, theano.compile.function_module.Function):
+            checkpoint_dict[k] = v
+    if len(checkpoint_dict.keys()) == 0:
+        raise ValueError("No theano functions in lcls!")
+
+    if magic_reload:
+        # magic will look in ~/dagbldr_lookup , seek out the appropriate saved
+        # function, then reload it
+        reload_cd = find_dagbldr_lookup_file()
+        if reload_cd is not None:
+            for k, v in reload_cd.items():
+                if isinstance(v, theano.compile.function_module.Function):
+                    old_weights = get_values_from_function(v)
+                    set_shared_variables_in_function(checkpoint_dict[k], old_weights)
+                else:
+                    checkpoint_dict[k] = v
+            del reload_cd
+    return checkpoint_dict
+
+
+def fetch_checkpoint_dict(list_of_match_strings, most_recent=True):
+    lookup_path = get_dagbldr_lookup_dir()
+    if not most_recent:
+        raise ValueError("Older than most recent file fetch not yet supported")
+
+    if not os.path.exists(lookup_path):
+        logger.info("dagbldr lookup folder not found at %s, changing search..." % lookup_path)
+        raise ValueError("Other searches not yet implemented!")
+    else:
+        matches = []
+        for fi in os.listdir(lookup_path):
+            lu_path = os.path.join(lookup_path, fi)
+            if all([ms in lu_path for ms in list_of_match_strings]):
+                matches.append(lu_path)
+
+        if len(matches) == 1:
+            best_match = matches[0]
+        else:
+            raise ValueError("Multiple matches found! Multiselection not yet implemented")
+
+        info = read_dagbldr_lookup_file(best_match)
+
+        # assumes model dir path matches between local and remote
+        # get the model dir to list on remote
+        model_dir = get_dagbldr_models_dir(verbose=False)
+        if model_dir[-1] != "/":
+            model_dir += "/"
+        local_hostname = socket.gethostname()
+        if local_hostname != info['hostname']:
+            # file is remote
+            res = pe("ssh %s 'ls %s'" % (info['hostname'], model_dir),
+                    shell=True, verbose=False)
+            remote_match_paths = [r for r in res if info['uuid'] in r]
+            if len(remote_match_paths) == 1:
+                remote_path = remote_match_paths[0]
+            else:
+                raise ValueError("Multiple matches found for %s on remote %s, cowardly refusing to do anything" % (info['uuid'], info['hostname']))
+            full_remote_path = model_dir + remote_path
+            lslt = pe("ssh %s 'ls -lt %s'" % (info['hostname'], full_remote_path),
+                      shell=True, verbose=False)
+            pkl_matches = [li for li in lslt if ".pkl" in li]
+            if len(pkl_matches) == 0:
+                raise ValueError("No pkl matches found for %s on remote %s" % (info['uuid'], info['hostname']))
+            # this should handle symlinks as well
+            most_recent_pkl = pkl_matches[0].split(" ")[-1]
+            if "/" in most_recent_pkl:
+                final_pkl = most_recent_pkl
+            else:
+                if full_remote_path[-1] != "/":
+                    full_remote_path += "/"
+                final_pkl = full_remote_path + most_recent_pkl
+
+            local_cache_dir = get_dagbldr_cache_dir()
+            # rsync cares about "/"
+            if local_cache_dir[-1] != "/":
+                local_cache_dir += "/"
+
+            fname = final_pkl.split("/")[-1]
+            local_cache = local_cache_dir + fname
+            cmd_string = "rsync -vh --copy-links --progress %s:%s %s" % (info['hostname'], final_pkl, local_cache)
+            logger.info("Fetching using fetch command '%s'" % cmd_string)
+
+            pe(cmd_string, shell=True)
+            with open(local_cache, "rb") as f:
+                loaded_cd = pickle.load(f)
+            return loaded_cd
+        else:
+            # not handling local situation yet, but should be much simpler
+            raise ValueError("Local file lookup NYI")
 
 
 # decided at import, should be consistent over training
@@ -457,15 +568,32 @@ def set_checkpoint_import_time(time_str):
     checkpoint_import_time = time_str
 
 
+def get_dagbldr_models_dir(verbose=True):
+    checkpoint_dir = os.getenv("DAGBLDR_MODELS", os.path.join(
+        os.path.expanduser("~"), "dagbldr_models"))
+
+    # Figure out if this is necessary to run on localdisk @ U de M
+    if _special_check(verbose=verbose):
+        checkpoint_dir = "/Tmp/" + USER + "/dagbldr_models"
+    return checkpoint_dir
+
+
+def get_dagbldr_cache_dir():
+    local_cache_dir = "/Tmp/" + USER + "/dagbldr_cache/"
+    if not os.path.exists(local_cache_dir):
+        os.mkdir(local_cache_dir)
+    return local_cache_dir
+
+
+def get_dagbldr_lookup_dir():
+    return os.getenv("DAGBLDR_LOOKUP", os.path.join(
+        os.path.expanduser("~"), "dagbldr_lookup"))
+
+
 def get_checkpoint_dir(checkpoint_dir=None, folder=None, create_dir=True):
     """ Get checkpoint directory path """
     if checkpoint_dir is None:
-        checkpoint_dir = os.getenv("DAGBLDR_MODELS", os.path.join(
-            os.path.expanduser("~"), "dagbldr_models"))
-
-        # Figure out if this is necessary to run on localdisk @ U de M
-        if _special_check():
-            checkpoint_dir = "/Tmp/" + USER + "/dagbldr_models"
+        checkpoint_dir = get_dagbldr_models_dir()
 
     if folder is None:
         checkpoint_name = get_script()
@@ -1237,11 +1365,7 @@ def get_resource_dir(name, resource_dir=None, folder=None, create_dir=True):
     """ Get dataset directory path """
     # Only used for JS downloader
     if not resource_dir:
-        if _special_check(False):
-            resource_dir = str(os.path.sep) + "Tmp" + str(os.path.sep) + USER + str(os.path.sep) + "dagbldr_models"
-        else:
-            resource_dir = os.getenv("DAGBLDR_MODELS", os.path.join(
-                os.path.expanduser("~"), "dagbldr_models"))
+        resource_dir = get_dagbldr_models_dir(verbose=False)
     if folder is None:
         resource_dir = os.path.join(resource_dir, name)
     else:
@@ -1827,7 +1951,7 @@ def run_loop(train_loop_function, train_itr,
     tcw = threaded_timed_writer(write_every_n_seconds, tag="time")
     vcw = threaded_timed_writer(write_every_n_seconds, tag="valid")
 
-    if _special_check():
+    if _special_check(verbose=False):
         fcw = threaded_timed_writer(sleep_time=write_every_n_seconds,
                                     tag="force")
     else:

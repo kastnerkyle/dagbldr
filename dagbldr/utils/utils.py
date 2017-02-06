@@ -5,20 +5,10 @@ import numpy as np
 import theano
 from theano import tensor
 from collections import OrderedDict
-import os
 
 from ..core import safe_zip
 from ..core import get_type
-from ..core import get_file_matches
-from ..core import get_checkpoint_dir
-from ..core import dunpickle
-from ..core import get_shared_variables_from_function
-from ..core import get_values_from_function
-from ..core import set_shared_variables_in_function
 from ..core import get_lib_shared_params
-from ..core import find_dagbldr_lookup_file
-from ..core import write_dagbldr_lookup_file
-from ..core import in_nosetest
 
 _type = get_type()
 
@@ -104,100 +94,3 @@ def path_between_points(start, stop, n_steps=100, dtype=theano.config.floatX):
     steps = np.arange(0, n_steps)[:, None] * np.ones((n_steps, len(stop)))
     steps = steps * step_vector + start
     return steps.astype(dtype)
-
-
-def create_checkpoint_dict(lcls, magic_reload=True):
-    """
-    Create checkpoint dict that contains all local theano functions
-
-    Example usage:
-        create_checkpoint_dict(locals())
-
-    Parameters
-    ----------
-    lcls : dict
-        A dictionary containing theano.function instances, normally the
-        result of locals()
-
-    magic_reload : bool, default True
-       Whether or not to use "magic reloading", using dagbldr model lookups.
-
-    Returns
-    -------
-    checkpoint_dict : dict
-        A checkpoint dictionary suitable for passing to a training loop
-
-    """
-    print("Creating new checkpoint dictionary")
-    checkpoint_dict = {}
-    for k, v in lcls.items():
-        if isinstance(v, theano.compile.function_module.Function):
-            checkpoint_dict[k] = v
-    if len(checkpoint_dict.keys()) == 0:
-        raise ValueError("No theano functions in lcls!")
-
-    if magic_reload:
-        # magic will look in ~/dagbldr_lookup , seek out the appropriate saved
-        # function, then reload it
-        reload_cd = find_dagbldr_lookup_file()
-        if reload_cd is not None:
-            for k, v in reload_cd.items():
-                if isinstance(v, theano.compile.function_module.Function):
-                    old_weights = get_values_from_function(v)
-                    set_shared_variables_in_function(checkpoint_dict[k], old_weights)
-                else:
-                    checkpoint_dict[k] = v
-            del reload_cd
-    return checkpoint_dict
-
-
-def create_or_continue_from_checkpoint_dict(lcls, append_name="best"):
-    raise ValueError("Deprecated")
-    """
-    Create or load a checkpoint dict that contains all local theano functions
-
-    Example usage:
-        create_or_load_checkpoint_dict(locals(), append_name="best")
-
-    Parameters
-    ----------
-    lcls : dict, default locals()
-        A dictionary containing theano.function instances, normally the
-        result of locals()
-
-    append_name : string, default "best"
-        The append name to use for the checkpoint
-
-    Returns
-    -------
-    checkpoint_dict : dict
-        A checkpoint dictionary suitable for passing to a training loop
-
-    """
-    sorted_paths = get_file_matches("*.npz", append_name)
-    if len(sorted_paths) < 1:
-        print("No saved results found in %s, creating!" % get_checkpoint_dir())
-        return create_checkpoint_dict(lcls)
-
-    last_weights_path = sorted_paths[-1]
-    print("Loading in weights from %s" % last_weights_path)
-    last_weights = np.load(last_weights_path)
-
-    checkpoint_dict = {}
-
-    sorted_paths = get_file_matches("*_results_*.pkl", append_name)
-    last_results_path = sorted_paths[-1]
-    print("Loading in results from %s" % last_results_path)
-
-    checkpoint_dict["previous_results"] = dunpickle(
-        last_results_path)
-
-    for k, v in lcls.items():
-        if isinstance(v, theano.compile.function_module.Function):
-            matches = [name for name in last_weights.keys() if k in name]
-            sorted_matches = sorted(
-                matches, key=lambda x: int(x.split("_")[-1]))
-            matching_values = [last_weights[s] for s in sorted_matches]
-            set_shared_variables_in_function(v, matching_values)
-            checkpoint_dict[k] = v
-    return checkpoint_dict
