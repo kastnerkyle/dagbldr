@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import print_function, division
 from collections import defaultdict
 import warnings
@@ -7,6 +8,8 @@ import shutil
 import stat
 import subprocess
 import h5py
+import wave
+import scipy as sp
 
 
 english_charset = ['\t', '!', ' ', "'", '-', ',', '.', '?', 'A', 'C', 'B', 'E', 'D', 'G', 'F', 'I', 'H', 'K', 'J', 'M', 'L', 'O', 'N', 'Q', 'P', 'S', 'R', 'U', 'T', 'W', 'V', 'Y', 'Z', 'a', '`', 'c', 'b', 'e', 'd', 'g', 'f', 'i', 'h', 'k', 'j', 'm', 'l', 'o', 'n', 'q', 'p', 's', 'r', 'u', 't', 'w', 'v', 'y', 'x', 'z']
@@ -1053,3 +1056,115 @@ def laglead_energy_vad(x, fs, small_win_size=0.25, large_win_size=1.,
                 is_up = True
     vad = np.array(vad)
     return x[vad], vad
+
+
+def read_signal(filename, winsize):
+    wf=wave.open(filename,'rb')
+    n=wf.getnframes()
+    str=wf.readframes(n)
+    params = ((wf.getnchannels(), wf.getsampwidth(),
+               wf.getframerate(), wf.getnframes(),
+               wf.getcomptype(), wf.getcompname()))
+    siglen=((int )(len(str)/2/winsize) + 1) * winsize
+    signal=sp.zeros(siglen, sp.int16)
+    signal[0:len(str)/2] = sp.fromstring(str,sp.int16)
+    return [signal, params]
+
+def get_frame(signal, winsize, no):
+    shift=winsize/2
+    start=no*shift
+    end = start+winsize
+    return signal[start:end]
+
+
+# from jfsantos
+class LTSD():
+    def __init__(self,winsize,window,order):
+        self.winsize = int(winsize)
+        self.window = window
+        self.order = order
+        self.amplitude = {}
+
+    def get_amplitude(self,signal,l):
+        if self.amplitude.has_key(l):
+            return self.amplitude[l]
+        else:
+            amp = sp.absolute(sp.fft(get_frame(signal, self.winsize,l) * self.window))
+            self.amplitude[l] = amp
+            return amp
+
+    def compute_noise_avg_spectrum(self, nsignal):
+        windownum = int(len(nsignal)//(self.winsize//2) - 1)
+        avgamp = np.zeros(self.winsize)
+        for l in range(windownum):
+            avgamp += sp.absolute(sp.fft(get_frame(nsignal, self.winsize,l) * self.window))
+        return avgamp/float(windownum)
+
+    def compute(self,signal):
+        self.windownum = int(len(signal)//(self.winsize//2) - 1)
+        ltsds = np.zeros(self.windownum)
+        #Calculate the average noise spectrum amplitude based 20 frames in the head parts of input signal.
+        self.avgnoise = self.compute_noise_avg_spectrum(signal[0:self.winsize*20])**2
+        for l in xrange(self.windownum):
+            ltsds[l] = self.ltsd(signal,l,5)
+        return ltsds
+
+    def ltse(self,signal,l,order):
+        maxamp = np.zeros(self.winsize)
+        for idx in range(l-order,l+order+1):
+            amp = self.get_amplitude(signal,idx)
+            maxamp = np.maximum(maxamp,amp)
+        return maxamp
+
+    def ltsd(self,signal,l,order):
+        if l < order or l+order >= self.windownum:
+            return 0
+        return 10.0*np.log10(np.sum(self.ltse(signal,l,order)**2/self.avgnoise)/float(len(self.avgnoise)))
+
+
+def ltsd_vad(x, fs, threshold=9, winsize=8192):
+    window = sp.hanning(winsize)
+    ltsd = LTSD(winsize, window, 5)
+    s_vad = ltsd.compute(x)
+    # LTSD is 50% overlap, so each "step" covers 4096 samples
+    # +1 to cover the extra edge window
+    n_samples = int(((len(s_vad) + 1) * winsize) // 2)
+    time_s = n_samples / float(fs)
+    time_points = np.linspace(0, time_s, len(s_vad))
+    time_samples = (fs * time_points).astype(np.int32)
+    time_samples = time_samples
+    f_vad = np.zeros_like(x, dtype=np.bool)
+    offset = winsize
+    for n, (ss, es) in enumerate(zip(time_samples[:-1], time_samples[1:])):
+        sss = ss - offset
+        if sss < 0:
+            sss = 0
+        ses = es - offset
+        if ses < 0:
+            ses = 0
+        if s_vad[n + 1] < threshold:
+            f_vad[sss:ses] = False
+        else:
+            f_vad[sss:ses] = True
+    f_vad[ses:] = False
+    return x[f_vad], f_vad
+
+
+if __name__=="__main__":
+    WINSIZE=8192
+    sound='sound.wav'
+    signal, params = read_signal(sound,WINSIZE)
+    res, vad = ltsd_vad(signal, 16000)
+    """
+    window = sp.hanning(WINSIZE)
+    ltsd = LTSD(WINSIZE, window, 5)
+    res =  ltsd.compute(signal)
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    ax.plot(signal)
+    ax.plot(np.max(signal) * (2 * vad.astype("int32") - 1))
+    plt.savefig('res.png')

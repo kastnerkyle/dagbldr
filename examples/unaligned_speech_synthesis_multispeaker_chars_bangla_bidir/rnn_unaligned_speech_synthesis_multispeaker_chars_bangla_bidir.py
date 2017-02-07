@@ -280,7 +280,7 @@ enc_ctx = enc_h1 #+ enc_h1_r #tensor.concatenate((enc_h1, enc_h1_r[::-1]), axis=
 '''
 
 id_emb = linear([id_sym], [n_ids], emb_dim, name="id_emb",
-                random_state=random_state)
+                init_func="unit_normal", random_state=random_state)
 
 average_step = 0.06732
 #min_step = .9 * average_step

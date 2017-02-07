@@ -19,7 +19,9 @@ except ImportError:
 
 import json
 import hashlib
-
+import readline
+readline.parse_and_bind('tab: complete')
+readline.parse_and_bind('set editing-mode vi')
 
 def _dumps(arg):
    # paranoia
@@ -417,7 +419,7 @@ def find_dagbldr_lookup_file():
     # for now use force_latest.pkl
     to_use = "force_latest.pkl"
     cached_pkl = cached_path + to_use
-
+    local_cache_dir = get_dagbldr_cache_dir()
     local_cache = local_cache_dir + "%s_%s" % (cached_uuid, to_use)
     cmd_string = "rsync -vh --copy-links --progress %s:%s %s" % (cached_machine, cached_pkl, local_cache)
     logger.info("Fetching using fetch command '%s'" % cmd_string)
@@ -512,7 +514,22 @@ def fetch_checkpoint_dict(list_of_match_strings, most_recent=True):
             if len(remote_match_paths) == 1:
                 remote_path = remote_match_paths[0]
             else:
-                raise ValueError("Multiple matches found for %s on remote %s, cowardly refusing to do anything" % (info['uuid'], info['hostname']))
+                while True:
+                    print("Multiple matches found for %s on remote %s" % (info['uuid'], info['hostname']))
+                    for n, rmp in enumerate(remote_match_paths):
+                        print("%i : %s" % (n, rmp))
+                    line = raw_input('Prompt ("stop" to quit): ')
+                    try:
+                        idx = int(line)
+                        if idx in list(range(len(remote_match_paths))):
+                            print("Selected index %i : %s" % (idx, remote_match_paths[idx]))
+                            break
+                    except:
+                        pass
+                    print('Selection invalid : "%s"' % line)
+                    print('Try again!')
+                remote_path = remote_match_paths[idx]
+                #raise ValueError("Multiple matches found for %s on remote %s, cowardly refusing to do anything" % (info['uuid'], info['hostname']))
             full_remote_path = model_dir + remote_path
             lslt = pe("ssh %s 'ls -lt %s'" % (info['hostname'], full_remote_path),
                       shell=True, verbose=False)

@@ -21,7 +21,7 @@ from dagbldr.optimizers import adam
 from dagbldr.optimizers import gradient_norm_rescaling
 from dagbldr.training import TrainingLoop
 
-filedir = "/Tmp/kastner/pavoque_all_speakers/norm_info/"
+filedir = "/Tmp/kastner/french_speakers/norm_info/"
 if not os.path.exists(filedir):
     if filedir[-1] != "/":
         fd = filedir + "/"
@@ -33,7 +33,7 @@ if not os.path.exists(filedir):
     cmd = "rsync -avhp %s %s" % (sdir, fd)
     pe(cmd, shell=True)
 
-filedir = "/Tmp/kastner/pavoque_all_speakers/numpy_features/"
+filedir = "/Tmp/kastner/french_speakers/numpy_features/"
 #if not os.path.exists(filedir):
 if filedir[-1] != "/":
     fd = filedir + "/"
@@ -46,20 +46,16 @@ cmd = "rsync -avhp %s %s" % (sdir, fd)
 pe(cmd, shell=True)
 
 files = [filedir + fs for fs in os.listdir(filedir)]
-tags = [f.split("/")[-1].split(".")[0].split("-")[-1] for f in files]
+
 final_files = []
 final_ids = []
 for n, f in enumerate(files):
-    if tags[n] == "angry":
+    if "pierre" in f:
         final_ids.append(0)
-    elif tags[n] == "happy":
+    elif "jessica" in f:
         final_ids.append(1)
-    elif tags[n] == "sad":
+    elif "camille" in f:
         final_ids.append(2)
-    elif tags[n] == "neutral":
-        final_ids.append(3)
-    elif tags[n] == "poker":
-        final_ids.append(4)
     else:
         raise ValueError("File mismatch %s" % f)
     final_files.append(f)
@@ -75,7 +71,7 @@ random_state = np.random.RandomState(1999)
 
 train_itr = masked_synthesis_sequence_iterator(files, minibatch_size,
                                                itr_type="unaligned_text",
-                                               class_set="german_chars",
+                                               class_set="french_chars",
                                                extra_ids=file_ids,
                                                stop_index=.9,
                                                randomize=True,
@@ -83,18 +79,18 @@ train_itr = masked_synthesis_sequence_iterator(files, minibatch_size,
 
 valid_itr = masked_synthesis_sequence_iterator(files, minibatch_size,
                                                itr_type="unaligned_text",
-                                               class_set="german_chars",
+                                               class_set="french_chars",
                                                extra_ids=file_ids,
                                                start_index=.9,
                                                randomize=True,
                                                random_state=random_state)
 
-"""
+'''
 x_tot = 0
 y_tot = 0
 try:
     while True:
-        X_mb, y_mb, X_mb_mask, y_mb_mask = next(train_itr)
+        X_mb, y_mb, X_mb_mask, y_mb_mask, id_mb = next(train_itr)
         for i in range(X_mb.shape[1]):
             x = X_mb_mask[:, i]
             y = y_mb_mask[:, i]
@@ -106,7 +102,7 @@ except:
     ratio = float(x_tot) / float(y_tot)
     from IPython import embed; embed()
     raise ValueError()
-"""
+'''
 
 X_mb, y_mb, X_mb_mask, y_mb_mask, id_mb = next(train_itr)
 train_itr.reset()
@@ -254,7 +250,7 @@ enc_ctx = enc_h1 #+ enc_h1_r #tensor.concatenate((enc_h1, enc_h1_r[::-1]), axis=
 id_emb = linear([id_sym], [n_ids], emb_dim, name="id_emb",
                 init_func="unit_normal", random_state=random_state)
 
-average_step = 0.0545
+average_step = 0.0577
 #min_step = .9 * average_step
 #max_step = 1.25 * average_step
 def step(in_t, mask_t, h1_tm1, h2_tm1, h3_tm1, k_tm1, w_tm1,
@@ -343,8 +339,8 @@ checkpoint_dict = create_checkpoint_dict(locals())
 TL = TrainingLoop(train_loop, train_itr,
                   valid_loop, valid_itr,
                   n_epochs=n_epochs,
-                  checkpoint_every_n_epochs=1,
-                  checkpoint_every_n_seconds=5 * 60 * 60,
+                  checkpoint_every_n_epochs=10,
+                  checkpoint_every_n_seconds=120 * 60,
                   checkpoint_dict=checkpoint_dict,
                   skip_minimums=True)
 epoch_results = TL.run()
