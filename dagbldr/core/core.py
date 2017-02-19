@@ -355,7 +355,7 @@ def read_dagbldr_lookup_file(fpath):
     return info
 
 
-def find_dagbldr_lookup_file():
+def find_dagbldr_lookup_file(force_match=None, quick_check=False):
     # side effects, will set the dagbldr global uuid to whatever it finds if
     # matching!
     lookup_path = get_dagbldr_lookup_dir()
@@ -363,6 +363,8 @@ def find_dagbldr_lookup_file():
     if not os.path.exists(lookup_path):
         logger.info("dagbldr lookup folder not found at %s, creating..." % lookup_path)
         os.mkdir(lookup_path)
+    if quick_check:
+        return
 
     # onetime hook to bootstrap for dev
     # write_dagbldr_lookup_file()
@@ -374,9 +376,10 @@ def find_dagbldr_lookup_file():
     for fi in os.listdir(lookup_path):
         lu_path = os.path.join(lookup_path, fi)
         res = read_dagbldr_lookup_file(lu_path)
-        if str(res["script_hash"]).strip() == self_hash:
+        if str(res["script_hash"]).strip() == self_hash or force_match in lu_path:
             logger.info("magic_reload match found at %s, reloading weights and stats" % lu_path)
             matches.append(res)
+
     if len(matches) > 1:
         logger.info("Multiple magic_reload matches found, using most recent")
         best_offset = 2000000000000000
@@ -430,7 +433,7 @@ def find_dagbldr_lookup_file():
     return loaded_cd
 
 
-def create_checkpoint_dict(lcls, magic_reload=True):
+def create_checkpoint_dict(lcls, magic_reload=True, force_match=None):
     """
     Create checkpoint dict that contains all local theano functions
 
@@ -455,7 +458,7 @@ def create_checkpoint_dict(lcls, magic_reload=True):
         A checkpoint dictionary suitable for passing to a training loop
 
     """
-    print("Creating new checkpoint dictionary")
+    logger.info("Creating new checkpoint dictionary")
     checkpoint_dict = {}
     for k, v in lcls.items():
         if isinstance(v, theano.compile.function_module.Function):
@@ -466,7 +469,7 @@ def create_checkpoint_dict(lcls, magic_reload=True):
     if magic_reload:
         # magic will look in ~/dagbldr_lookup , seek out the appropriate saved
         # function, then reload it
-        reload_cd = find_dagbldr_lookup_file()
+        reload_cd = find_dagbldr_lookup_file(force_match=force_match)
         if reload_cd is not None:
             for k, v in reload_cd.items():
                 if isinstance(v, theano.compile.function_module.Function):
@@ -537,13 +540,76 @@ def fetch_checkpoint_dict(list_of_match_strings, most_recent=True):
             if len(pkl_matches) == 0:
                 raise ValueError("No pkl matches found for %s on remote %s" % (info['uuid'], info['hostname']))
             # this should handle symlinks as well
+            idx = 0
+            tries = 0
+            while tries < 3:
+                try:
+                    most_recent_pkl = pkl_matches[idx].split(" ")[-1]
+                    if "/" in most_recent_pkl:
+                        final_pkl = most_recent_pkl
+                    else:
+                        if full_remote_path[-1] != "/":
+                            full_remote_path += "/"
+                        final_pkl = full_remote_path + most_recent_pkl
+
+                    local_cache_dir = get_dagbldr_cache_dir()
+                    # rsync cares about "/"
+                    if local_cache_dir[-1] != "/":
+                        local_cache_dir += "/"
+
+                    fname = final_pkl.split("/")[-1]
+                    local_cache = local_cache_dir + fname
+                    cmd_string = "rsync -vh --copy-links --progress %s:%s %s" % (info['hostname'], final_pkl, local_cache)
+                    logger.info("Fetching using fetch command '%s'" % cmd_string)
+
+                    pe(cmd_string, shell=True)
+                    with open(local_cache, "rb") as f:
+                        loaded_cd = pickle.load(f)
+                    break
+                except EOFError:
+                    idx += 1
+                    tries += 1
+                    logger.info("Tried pkl %s, but it failed. Trying older files..." % fname)
+                    if len(pkl_matches) <= idx:
+                        raise ValueError("Unable to open any pkl checkpoints!")
+            return loaded_cd
+        else:
+            # file is local
+            local_match_paths = [r for r in os.listdir(model_dir)
+                                 if info['uuid'] in r]
+            if len(local_match_paths) == 1:
+                local_path = local_match_paths[0]
+            else:
+                while True:
+                    print("Multiple matches found for %s on local %s" % (info['uuid'], info['hostname']))
+                    for n, rmp in enumerate(local_match_paths):
+                        print("%i : %s" % (n, rmp))
+                    line = raw_input('Prompt ("stop" to quit): ')
+                    try:
+                        idx = int(line)
+                        if idx in list(range(len(local_match_paths))):
+                            print("Selected index %i : %s" % (idx, local_match_paths[idx]))
+                            break
+                    except:
+                        pass
+                    print('Selection invalid : "%s"' % line)
+                    print('Try again!')
+                local_path = local_match_paths[idx]
+                #raise ValueError("Multiple matches found for %s on remote %s, cowardly refusing to do anything" % (info['uuid'], info['hostname']))
+            full_local_path = model_dir + local_path
+            # need time ordering from ls -lt
+            res = pe("ls -lt %s" % full_local_path, shell=True)
+            pkl_matches = [li for li in res if ".pkl" in li]
+            if len(pkl_matches) == 0:
+                raise ValueError("No pkl matches found for %s on remote %s" % (info['uuid'], info['hostname']))
+            # this should handle symlinks as well
             most_recent_pkl = pkl_matches[0].split(" ")[-1]
             if "/" in most_recent_pkl:
                 final_pkl = most_recent_pkl
             else:
-                if full_remote_path[-1] != "/":
-                    full_remote_path += "/"
-                final_pkl = full_remote_path + most_recent_pkl
+                if full_local_path[-1] != "/":
+                    full_local_path += "/"
+                final_pkl = full_local_path + most_recent_pkl
 
             local_cache_dir = get_dagbldr_cache_dir()
             # rsync cares about "/"
@@ -559,9 +625,6 @@ def fetch_checkpoint_dict(list_of_match_strings, most_recent=True):
             with open(local_cache, "rb") as f:
                 loaded_cd = pickle.load(f)
             return loaded_cd
-        else:
-            # not handling local situation yet, but should be much simpler
-            raise ValueError("Local file lookup NYI")
 
 
 # decided at import, should be consistent over training
@@ -1949,7 +2012,7 @@ def run_loop(train_loop_function, train_itr,
         start_epoch = 0
 
     # check that the lookup folder exists
-    find_dagbldr_lookup_file()
+    find_dagbldr_lookup_file(quick_check=True)
     # save current state of lib and calling script
     archive_dagbldr()
     script = get_script()
@@ -2183,7 +2246,10 @@ def run_loop(train_loop_function, train_itr,
                 if np.isnan(mean_epoch_valid_cost):
                     logger.info("Previous valid costs %s" % overall_valid_costs[-5:])
                     logger.info("NaN detected in valid cost, epoch %i" % e)
-                    raise StopIteration("NaN detected in valid")
+                    logger.info("Replacing with previous valid cost")
+                    mean_epoch_valid_cost = overall_valid_costs[-1]
+                    # try to keep going
+                    #raise StopIteration("NaN detected in valid")
                 overall_valid_costs.append(mean_epoch_valid_cost)
 
                 if mean_epoch_train_cost < old_min_train_cost:

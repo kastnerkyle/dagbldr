@@ -300,7 +300,9 @@ class masked_synthesis_sequence_iterator(object):
             reordered_splitlist = list(zip(*[iter(reordered_filename_list)] * self.minibatch_size))
 
             random_index = list(range(len(reordered_splitlist)))
-            self.random_state.shuffle(random_index)
+
+            if self.randomize:
+                self.random_state.shuffle(random_index)
             reordered_splitlist = [reordered_splitlist[i] for i in random_index]
             reordered_filename_list = [item for sublist in reordered_splitlist
                                        for item in sublist]
@@ -644,7 +646,7 @@ def generate_merlin_wav(
     data = data * cmp_std + cmp_mean
     """
 
-    array_to_binary_file(data, file_name)
+    array_to_binary_file(data[:8000], file_name)
     # This code was adapted from Merlin. All licenses apply
 
     out_dimension_dict = {'bap': 1, 'lf0': 1, 'mgc': 60, 'vuv': 1}
@@ -804,32 +806,28 @@ def generate_merlin_wav(
 
     # Vocoder WORLD
 
-    pe(
-        '{sopr} -magic -1.0E+10 -EXP -MAGIC 0.0 {lf0} | '
-        '{x2x} +fd > {f0}'
-        .format(
-            sopr=sptk_path['SOPR'], lf0=files['lf0'],
-            x2x=sptk_path['X2X'], f0=files['f0']), shell=True)
+    soprcmd1 = '{sopr} -magic -1.0E+10 -EXP -MAGIC 0.0 {lf0} | {x2x} +fd > {f0}'
+    soprcmd1 = soprcmd1.format(sopr=sptk_path['SOPR'], lf0=files['lf0'], x2x=sptk_path['X2X'], f0=files['f0'])
 
-    pe(
-        '{sopr} -c 0 {bap} | {x2x} +fd > {ap}'.format(
-            sopr=sptk_path['SOPR'], bap=files['bap'],
-            x2x=sptk_path['X2X'], ap=files['ap']), shell=True)
+    pe(soprcmd1, shell=True)
 
-    pe(
-        '{mgc2sp} -a {alpha} -g 0 -m {order} -l {fl} -o 2 {mgc} | '
-        '{sopr} -d 32768.0 -P | {x2x} +fd > {sp}'.format(
-            mgc2sp=sptk_path['MGC2SP'], alpha=fw_alpha,
-            order=mgc_dim - 1, fl=fl, mgc=mgc_file_name,
-            sopr=sptk_path['SOPR'], x2x=sptk_path['X2X'], sp=files['sp']),
-    shell=True)
+    soprcmd2 = '{sopr} -c 0 {bap} | {x2x} +fd > {ap}'
+    soprcmd2 = soprcmd2.format(sopr=sptk_path['SOPR'], bap=files['bap'], x2x=sptk_path['X2X'], ap=files['ap'])
+    pe(soprcmd2, shell=True)
 
-    pe(
-        '{synworld} {fl} {sr} {f0} {sp} {ap} {wav}'.format(
-            synworld=world_path['SYNTHESIS'], fl=fl, sr=sr,
-            f0=files['f0'], sp=files['sp'], ap=files['ap'],
-            wav=files['wav']),
-    shell=True)
+    mgc2spcmd='{mgc2sp} -a {alpha} -g 0 -m {order} -l {fl} -o 2 {mgc} | {sopr} -d 32768.0 -P | {x2x} +fd > {sp}'
+    mgc2spcmd=mgc2spcmd.format(mgc2sp=sptk_path['MGC2SP'], alpha=fw_alpha,
+                               order=mgc_dim - 1, fl=fl, mgc=mgc_file_name,
+                               sopr=sptk_path['SOPR'], x2x=sptk_path['X2X'],
+                               sp=files['sp'])
+    pe(mgc2spcmd, shell=True)
+
+    syncmd='{synworld} {fl} {sr} {f0} {sp} {ap} {wav}'
+    syncmd=syncmd.format(synworld=world_path['SYNTHESIS'], fl=fl, sr=sr,
+                         f0=files['f0'], sp=files['sp'], ap=files['ap'],
+                         wav=files['wav'])
+    pe(syncmd, shell=True)
+
 
     pe(
         'rm -f {ap} {sp} {f0} {bap} {lf0} {mgc} {mgc}_b0 {mgc}_p_b0 '
