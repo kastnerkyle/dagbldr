@@ -7,6 +7,7 @@ import sys
 import numpy as np
 from scipy.io import wavfile
 import copy
+import time
 
 import argparse
 import cPickle as pickle
@@ -52,6 +53,7 @@ if arg_ext == "npz":
     n_rounds = len([dk for dk in d.keys() if "audio_results" in dk])
     removed_count = 0
     total_count = 0
+    start_time = time.time()
     for n in range(n_rounds):
         r = d["audio_results_%i" % n]
         r = r * cmp_std + cmp_mean
@@ -93,7 +95,6 @@ if arg_ext == "npz":
             if not os.path.exists("gen/" + genpart + ".wav"):
                 truepath = "gen/" + truename + ".wav"
                 pe("mv %s gen/trash/%s.wav" % (truepath, truename), shell=True)
-
     print("Reconstruction complete")
     print("Accepted ratio %s" % str((total_count - removed_count) / float(total_count)))
     sys.exit()
@@ -226,6 +227,7 @@ if arg_ext == "none":
 
     # A way to increase the number of samples
     n_rounds = min([n_ids, 5])
+    start_time = time.time()
     for n in range(n_rounds):
         X_mb, y_mb, X_mb_mask, y_mb_mask, id_mb = next(valid_itr)
         y_mb = np.concatenate((0. * y_mb[0, :, :][None], y_mb))
@@ -295,3 +297,6 @@ if arg_ext == "none":
     savename = "sampled.npz"
     np.savez_compressed(savename, **out)
     print("Sampling complete, saved to %s" % savename)
+    end_time = time.time()
+    print("Number of rounds sampled %i" % int(n_rounds))
+    print("Total time to sample %f" % (end_time - start_time))

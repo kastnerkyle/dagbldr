@@ -147,11 +147,13 @@ class masked_synthesis_sequence_iterator(object):
                  class_set="english_chars",
                  extra_options="lower",
                  extra_ids=None,
+                 verbose=False,
                  randomize=False,
                  random_state=None):
         self.minibatch_size = minibatch_size
         self.normalized = normalized
         self.extra_options = extra_options
+        self.verbose = verbose
 
         n_files = len(filename_list)
         if start_index != 0:
@@ -363,7 +365,9 @@ class masked_synthesis_sequence_iterator(object):
                 if all([ti in self._lu.keys() for ti in txt]):
                     txt = np.array([self._lu[ti] for ti in txt])
                 else:
-                    print("WARNING: Some keys not found in lookup, skipping them!")
+                    nf = [ti for ti in txt if ti not in self._lu.keys()]
+                    if self.verbose:
+                        print("WARNING: Keys %s not found in lookup, skipping them!" % str(nf))
                     txt = np.array([self._lu[ti] for ti in txt if ti in self._lu.keys()])
                 return (txt, d["audio_features"])
             else:

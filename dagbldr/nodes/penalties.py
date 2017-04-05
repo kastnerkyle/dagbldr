@@ -92,7 +92,8 @@ def categorical_crossentropy(predicted_values, true_values, eps=0.):
             res = -tensor.log(pr)[rows, ind]
             return res.reshape((d0, d1))
         else:
-            raise ValueError("Unable to expand true_values dimenson to match predicted")
+            if true_values.ndim != predicted_values.ndim:
+                raise ValueError("Unable to expand true_values dimenson to match predicted")
     indices = tensor.argmax(true_values, axis=-1)
     if predicted_values.ndim < 3:
         return -tensor.log(p)[rows, indices]

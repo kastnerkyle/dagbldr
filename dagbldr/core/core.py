@@ -376,7 +376,11 @@ def find_dagbldr_lookup_file(force_match=None, quick_check=False):
     for fi in os.listdir(lookup_path):
         lu_path = os.path.join(lookup_path, fi)
         res = read_dagbldr_lookup_file(lu_path)
-        if str(res["script_hash"]).strip() == self_hash or force_match in lu_path:
+        if force_match is None:
+            rh = False
+        else:
+            rh = force_match in lu_path
+        if str(res["script_hash"]).strip() == self_hash or rh:
             logger.info("magic_reload match found at %s, reloading weights and stats" % lu_path)
             matches.append(res)
 
@@ -499,7 +503,22 @@ def fetch_checkpoint_dict(list_of_match_strings, most_recent=True):
         if len(matches) == 1:
             best_match = matches[0]
         else:
-            raise ValueError("Multiple matches found! Multiselection not yet implemented")
+            while True:
+                print("Multiple matches found for %s" % (str(list_of_match_strings)))
+                for n, m in enumerate(matches):
+                    print("%i : %s" % (n, m))
+                line = raw_input('Prompt ("Ctrl-C" to quit): ')
+                try:
+                    idx = int(line)
+                    if idx in list(range(len(matches))):
+                        print("Selected index %i : %s" % (idx, matches[idx]))
+                        break
+                except:
+                    pass
+                print('Selection invalid : "%s"' % line)
+                print('Try again!')
+            best_match = matches[idx]
+            # raise ValueError("Multiple matches found! Multiselection not yet implemented")
 
         info = read_dagbldr_lookup_file(best_match)
 
@@ -521,7 +540,7 @@ def fetch_checkpoint_dict(list_of_match_strings, most_recent=True):
                     print("Multiple matches found for %s on remote %s" % (info['uuid'], info['hostname']))
                     for n, rmp in enumerate(remote_match_paths):
                         print("%i : %s" % (n, rmp))
-                    line = raw_input('Prompt ("stop" to quit): ')
+                    line = raw_input('Prompt ("Ctrl-C" to quit): ')
                     try:
                         idx = int(line)
                         if idx in list(range(len(remote_match_paths))):
@@ -2060,6 +2079,7 @@ def run_loop(train_loop_function, train_itr,
             results_dict = {k: v for k, v in checkpoint_dict.items()
                             if k not in ignore_keys}
             this_results_dict = results_dict
+            loop_info = {"epoch": e_i}
             try:
                 # train loop
                 train_start = time.time()
@@ -2069,7 +2089,7 @@ def run_loop(train_loop_function, train_itr,
                     if train_mb_count < skip_n_train_minibatches:
                         train_mb_count += 1
                         continue
-                    partial_train_costs = train_loop(train_itr)
+                    partial_train_costs = train_loop(train_itr, loop_info)
                     train_costs[train_mb_count] = np.mean(partial_train_costs)
                     tc = train_costs[train_mb_count]
                     if np.isnan(tc):
@@ -2189,7 +2209,7 @@ def run_loop(train_loop_function, train_itr,
                 try:
                     # Valid loop
                     while True:
-                        partial_valid_costs = valid_loop(valid_itr)
+                        partial_valid_costs = valid_loop(valid_itr, loop_info)
                         valid_costs[valid_mb_count] = np.mean(partial_valid_costs)
                         vc = valid_costs[valid_mb_count]
                         if np.isnan(vc):
