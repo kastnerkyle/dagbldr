@@ -6,7 +6,7 @@ from theano import tensor
 from dagbldr.nodes import softmax, linear, categorical_crossentropy
 from dagbldr.nodes import gru
 from dagbldr.nodes import gru_fork
-from dagbldr.nodes import gaussian_attention
+from dagbldr.nodes import softmax_attention
 from dagbldr.nodes import masked_cost
 
 from dagbldr import get_params
@@ -14,13 +14,12 @@ from dagbldr import get_params
 from dagbldr.optimizers import adam
 from dagbldr.optimizers import gradient_norm_rescaling
 
-def test_gaussian_rnn():
+def test_full_softmax_attention_rnn():
     input_str = "abcdac"
-    mult = 4
     s = list(set(input_str))
     indices = {k: v for k, v in zip(s, range(len(s)))}
     r_indices = {v: k for k, v in indices.items()}
-    output_str = "".join([i * mult for i in input_str])
+    output_str = input_str[::-1]
 
     def oh(arr):
         max_idx = max(arr) + 1
@@ -51,14 +50,12 @@ def test_gaussian_rnn():
     n_ins = X_mb.shape[-1]
     n_outs = y_mb.shape[-1]
     n_ctx_ins = 2 * n_hid
-    att_dim = 1
 
     train_enc_h1_init = np.zeros((minibatch_size, n_hid)).astype("float32")
     train_enc_h1_r_init = np.zeros((minibatch_size, n_hid)).astype("float32")
 
     train_h1_init = np.zeros((minibatch_size, n_hid)).astype("float32")
     train_w1_init = np.zeros((minibatch_size, n_ctx_ins)).astype("float32")
-    train_k1_init = np.zeros((minibatch_size, att_dim)).astype("float32")
 
     X_sym = tensor.tensor3()
     y_sym = tensor.tensor3()
@@ -68,12 +65,6 @@ def test_gaussian_rnn():
     enc_h1_0 = tensor.fmatrix()
     enc_h1_r_0 = tensor.fmatrix()
     h1_0 = tensor.fmatrix()
-
-    w1_0 = tensor.fmatrix()
-    w1_0.tag.test_value = train_w1_init
-
-    k1_0 = tensor.fmatrix()
-    k1_0.tag.test_value = train_k1_init
 
     X_sym.tag.test_value = X_mb
     X_mask_sym.tag.test_value = X_mb_mask
@@ -116,35 +107,28 @@ def test_gaussian_rnn():
 
     enc_ctx = tensor.concatenate((enc_h1, enc_h1_r[::-1]), axis=2)
 
-#average_step = 1.
-#min_step = .9 * average_step
-#max_step = 1.25 * average_step
-    def step(in_t, mask_t, h1_tm1, k_tm1, w_tm1, ctx, ctx_mask):
-        h1_t, k1_t, w1_t = gaussian_attention([in_t], [n_outs],
-                                            h1_tm1, k_tm1, w_tm1,
-                                            ctx, n_ctx_ins, n_hid,
-                                            att_dim=att_dim,
-                                            #average_step=average_step,
-                                            #min_step=min_step,
-                                            #max_step=max_step,
-                                            cell_type="gru",
-                                            conditioning_mask=ctx_mask,
-                                            step_mask=mask_t,
-                                            name="rec_gauss_att",
-                                            random_state=random_state)
-        return h1_t, k1_t, w1_t
+    def step(in_t, mask_t, h1_tm1, ctx, ctx_mask):
+        h1_t, att_t = softmax_attention([in_t], [n_outs],
+                                    h1_tm1,
+                                    ctx, n_ctx_ins, n_hid,
+                                    cell_type="gru",
+                                    conditioning_mask=ctx_mask,
+                                    step_mask=mask_t,
+                                    name="rec_softmax_att",
+                                    random_state=random_state)
+        return h1_t, att_t
 
-    (h1, k, w), _ = theano.scan(step,
-                                sequences=[y_tm1_sym, y_tm1_mask_sym],
-                                outputs_info=[h1_0, k1_0, w1_0],
-                                non_sequences=[enc_ctx, X_mask_sym])
+    (h1, att), _ = theano.scan(step,
+                             sequences=[y_tm1_sym, y_tm1_mask_sym],
+                             outputs_info=[h1_0, None],
+                             non_sequences=[enc_ctx, X_mask_sym])
     comb = h1
     y_pred = softmax([comb], [n_hid], n_outs, name="pred_l",
-                    random_state=random_state, init_func=init)
+                     random_state=random_state, init_func=init)
 
     cost = categorical_crossentropy(y_pred, y_t_sym)
     loss = masked_cost(cost, y_t_mask_sym)
-# normalize
+    # normalize
     cost = loss.sum() / (y_mask_sym.sum() + 1.)
 
     params = list(get_params().values())
@@ -156,30 +140,28 @@ def test_gaussian_rnn():
     updates = opt.updates(params, grads)
 
     in_args = [X_sym, y_sym, X_mask_sym, y_mask_sym]
-    in_args += [enc_h1_0, enc_h1_r_0, h1_0, k1_0, w1_0]
+    in_args += [enc_h1_0, enc_h1_r_0, h1_0]
     out_args = [cost, enc_h1, enc_h1_r, h1]
-    pred_out_args = [y_pred, enc_h1, enc_h1_r, h1, k, w]
+    pred_out_args = [y_pred, enc_h1, enc_h1_r, h1, att]
 
-    fit_function = theano.function(in_args, out_args, updates=updates)
+    fit_function = theano.function(in_args, out_args, updates=updates,
+                                   mode="FAST_COMPILE")
 
+    #n_epochs = 5000
     n_epochs = 1
     for i in range(n_epochs):
         #print("itr {}".format(i))
         cost, enc_h1, enc_h1_r, h1 = fit_function(X_mb, y_mb, X_mb_mask, y_mb_mask,
                                                 train_enc_h1_init,
                                                 train_enc_h1_r_init,
-                                                train_h1_init,
-                                                train_k1_init,
-                                                train_w1_init)
+                                                train_h1_init)
 
     """
     predict_function = theano.function(in_args, pred_out_args)
-    pred, enc_h1, enc_h1_r, h1_o, k_o, w_o = predict_function(X_mb, y_mb, X_mb_mask, y_mb_mask,
-                                                            train_enc_h1_init,
-                                                            train_enc_h1_r_init,
-                                                            train_h1_init,
-                                                            train_k1_init,
-                                                            train_w1_init)
+    pred, enc_h1, enc_h1_r, h1_o, att_o = predict_function(X_mb, y_mb, X_mb_mask, y_mb_mask,
+                                                           train_enc_h1_init,
+                                                           train_enc_h1_r_init,
+                                                           train_h1_init)
     best = pred.argmax(axis=-1)
     print("Expected output:")
     print(output_str)

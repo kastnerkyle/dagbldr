@@ -384,3 +384,86 @@ def gaussian_attention(list_of_step_inputs, list_of_step_input_dims,
     ss6 = ss5 * ctx.dimshuffle(1, 0, 2) * ctx_mask.dimshuffle(1, 0, 'x')
     w_t = ss6.sum(axis=1)
     return h_t, k_t, w_t
+
+
+def softmax_attention(list_of_step_inputs, list_of_step_input_dims,
+                      previous_state,
+                      full_conditioning_tensor,
+                      conditioning_dim,
+                      next_proj_dim,
+                      cell_type="gru",
+                      attention_temperature=None,
+                      step_mask=None, conditioning_mask=None, name=None,
+                      batch_normalize=False, mode_switch=None,
+                      random_state=None, strict=True, init_func="default"):
+    """
+    returns h_t (hidden state of inner rnn)
+            att_t (attention weights for each element of conditioning tensor)
+
+    Based on implementation from Kyunghyun Cho and Kelvin Xu
+    """
+    if attention_temperature is not None:
+        raise ValueError("Attention temperature not yet implemented")
+    if name is None:
+        name = get_name()
+    else:
+        name = name + "_softmax_attention"
+
+    #TODO: specialize for jose style init...
+    if init_func == "default":
+        forward_init = None
+        hidden_init = "ortho"
+    else:
+        raise ValueError()
+
+    check = any([si.ndim != 2 for si in list_of_step_inputs])
+    if check:
+        raise ValueError("Unable to support step_input with n_dims != 2")
+
+    ctx = full_conditioning_tensor
+    ctx_mask = conditioning_mask
+    if ctx_mask is None:
+        ctx_mask = tensor.alloc(1., ctx.shape[0], 1)
+
+    ctx_dim = conditioning_dim
+    h_tm1 = previous_state
+
+    p_ctx = projection(
+        list_of_inputs=[ctx], list_of_input_dims=[ctx_dim],
+        proj_dim=ctx_dim, name=name + "_p_ctx", batch_normalize=batch_normalize,
+        mode_switch=mode_switch, random_state=random_state,
+        strict=strict, init_func="normal", act_func=linear_activation)
+
+    p_state = projection(
+        list_of_inputs=[h_tm1], list_of_input_dims=[next_proj_dim],
+        proj_dim=ctx_dim, name=name + "_p_state",
+        batch_normalize=batch_normalize,
+        mode_switch=mode_switch, random_state=random_state,
+        strict=strict, init_func="normal", act_func=linear_activation)
+
+    p_joint = tensor.tanh(p_ctx + p_state[None, :, :])
+
+    alphas = projection(
+        list_of_inputs=[p_joint], list_of_input_dims=[ctx_dim],
+        proj_dim=1, name=name + "_alphas", batch_normalize=batch_normalize,
+        mode_switch=mode_switch, random_state=random_state,
+        strict=strict, init_func="normal", act_func=linear_activation)
+
+    alphas = alphas.reshape([alphas.shape[0], alphas.shape[1]])
+    alphas = tensor.exp(alphas) * ctx_mask
+    alphas = alphas / alphas.sum(axis=0, keepdims=True)
+
+    att_ctx = (ctx * alphas[:, :, None]).sum(axis=0)
+
+    if cell_type == "gru":
+        fork1 = gru_fork(list_of_step_inputs + [att_ctx],
+                         list_of_step_input_dims + [conditioning_dim],
+                         next_proj_dim,
+                         name=name + "_fork", random_state=random_state,
+                         init_func="normal")
+        h_t = gru(fork1, previous_state, [next_proj_dim], next_proj_dim,
+                  mask=step_mask, name=name + "_rec", random_state=random_state,
+                  init_func="normal")
+    else:
+        raise ValueError("Unsupported cell_type %s" % cell_type)
+    return h_t, alphas.T
