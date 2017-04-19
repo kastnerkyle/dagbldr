@@ -1310,10 +1310,19 @@ def fetch_bach_chorales_music21():
         A dictionary cantaining data and image statistics.
 
         summary["data_pitch"] : array, shape (34270, 4)
+            All pieces' pitches concatenated as an array
         summary["data_duration"] : array, shape (34270, 4)
+            All pieces' durations concatenated as an array
+        summary["list_of_data_pitch"] : list of array
+            Pitches for each piece
+        summary["list_of_data_duration"] : list of array
+            Durations for each piece
+        summary["list_of_data_key"] : list of str
+            String key for each piece
         summary["pitch_list"] : list, len 54
         summary["duration_list"] : list, len 12
         summary["major_minor_split"] : int, 16963
+            Index into data_pitch or data_duration to split for major and minor
 
     Can split the data to only have major or minor key songs.
     For major, summary["data_pitch"][:summary["major_minor_split"]]
@@ -1357,7 +1366,8 @@ def fetch_bach_chorales_music21():
              "data_key": all_transposed_keys}
         with open(pickle_path, "wb") as f:
             logger.info("Saving pickle file %s" % pickle_path)
-            pickle.dump(d, f, -1)
+            pickle.dump(d, f)
+        logger.info("Pickle file %s saved" % pickle_path)
     else:
         with open(pickle_path, "rb") as f:
             d = pickle.load(f)
@@ -1384,22 +1394,32 @@ def fetch_bach_chorales_music21():
     dd = np.concatenate(major_duration + minor_duration, axis=1)
     major_minor_split = sum([m.shape[1] for m in major_pitch])
 
-    def replace_with_indices(arr):
+    def replace_with_indices(arr, lu=None):
         "Inplace but return reference"
-        uniques = np.unique(arr)
-        classes = np.arange(len(uniques))
-        all_idx = [np.where(arr.ravel() == u)[0] for u in uniques]
+        if lu is None:
+            uniques = np.unique(arr)
+            classes = np.arange(len(uniques))
+            lu = {k: v for k, v in zip(uniques, classes)}
 
-        for n, (c, idx) in enumerate(zip(classes, all_idx)):
-            arr.flat[idx] = float(n)
-        return arr
+        all_idx = [np.where(arr.ravel() == u)[0] for u in sorted(lu.keys())]
+
+        for u, idx in zip(sorted(lu.keys()), all_idx):
+            if len(idx) > 0:
+                arr.flat[idx] = lu[u]
+        return arr, lu
+
     pitch_list = sorted(np.unique(dp))
     duration_list = sorted(np.unique(dd))
 
-    dp = replace_with_indices(dp)
-    dd = replace_with_indices(dd)
+    dp, pitch_lu = replace_with_indices(dp)
+    dd, duration_lu = replace_with_indices(dd)
+    ldp = [replace_with_indices(dpi.T, pitch_lu)[0] for dpi in d["data_pitch"]]
+    ldd = [replace_with_indices(ddi.T, duration_lu)[0] for ddi in d["data_duration"]]
     d = {"data_pitch": dp.transpose()[:, ::-1],
          "data_duration": dd.transpose()[:, ::-1],
+         "list_of_data_pitch": ldp,
+         "list_of_data_duration": ldd,
+         "list_of_data_key": d["data_key"],
          "pitch_list": pitch_list,
          "duration_list": duration_list,
          "major_minor_split": major_minor_split}

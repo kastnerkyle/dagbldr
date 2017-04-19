@@ -437,7 +437,7 @@ def find_dagbldr_lookup_file(force_match=None, quick_check=False):
     return loaded_cd
 
 
-def create_checkpoint_dict(lcls, magic_reload=True, force_match=None):
+def create_checkpoint_dict(lcls, magic_reload=False, force_match=None):
     """
     Create checkpoint dict that contains all local theano functions
 
@@ -450,11 +450,15 @@ def create_checkpoint_dict(lcls, magic_reload=True, force_match=None):
         A dictionary containing theano.function instances, normally the
         result of locals()
 
-    magic_reload : bool, default True
+    magic_reload : bool, default False
        Whether or not to use "magic reloading", using dagbldr model lookups.
        This will replace the initialized weights with weights from
        a previously saved model, either locally or remotely depending on the
        entries in ~/dagbldr_lookup/*.json.
+
+    force_match : str, default None
+       Substring to force match with, default will do intelligent search based
+       on the name.
 
     Returns
     -------
@@ -485,10 +489,12 @@ def create_checkpoint_dict(lcls, magic_reload=True, force_match=None):
     return checkpoint_dict
 
 
-def fetch_checkpoint_dict(list_of_match_strings, most_recent=True):
+def fetch_checkpoint_dict(list_of_match_strings,
+                          list_of_remote_match_strings=None):
+    """
+    defaults to most recent checkpoint for given match string
+    """
     lookup_path = get_dagbldr_lookup_dir()
-    if not most_recent:
-        raise ValueError("Older than most recent file fetch not yet supported")
 
     if not os.path.exists(lookup_path):
         logger.info("dagbldr lookup folder not found at %s, changing search..." % lookup_path)
@@ -506,7 +512,9 @@ def fetch_checkpoint_dict(list_of_match_strings, most_recent=True):
             while True:
                 print("Multiple matches found for %s" % (str(list_of_match_strings)))
                 for n, m in enumerate(matches):
-                    print("%i : %s" % (n, m))
+                    with open(m) as f:
+                       r = json.load(f)
+                    print("%i : %s (%s)" % (n, m, r['import_time']))
                 line = raw_input('Prompt ("Ctrl-C" to quit): ')
                 try:
                     idx = int(line)
@@ -561,6 +569,13 @@ def fetch_checkpoint_dict(list_of_match_strings, most_recent=True):
             # this should handle symlinks as well
             idx = 0
             tries = 0
+
+            if list_of_remote_match_strings is not None:
+                extras = [pm for pm in pkl_matches
+                          if all([lrm in pm for lrm in list_of_remote_match_strings])]
+                print('Appending matches %s' % str(extras))
+                pkl_matches = extras + pkl_matches
+
             while tries < 3:
                 try:
                     most_recent_pkl = pkl_matches[idx].split(" ")[-1]
@@ -622,6 +637,12 @@ def fetch_checkpoint_dict(list_of_match_strings, most_recent=True):
             if len(pkl_matches) == 0:
                 raise ValueError("No pkl matches found for %s on remote %s" % (info['uuid'], info['hostname']))
             # this should handle symlinks as well
+
+            if list_of_remote_match_strings is not None:
+                extras = [pm for pm in pkl_matches
+                          if all([lrm in pm for lrm in list_of_remote_match_strings])]
+                pkl_matches = extras + pkl_matches
+
             most_recent_pkl = pkl_matches[0].split(" ")[-1]
             if "/" in most_recent_pkl:
                 final_pkl = most_recent_pkl

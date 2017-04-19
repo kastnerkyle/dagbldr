@@ -3,5 +3,7 @@ __version__ = '.'.join(__version_info__)
 
 from .datasets import *
 from .dataset_utils import minibatch_iterator, list_iterator
+from .dataset_utils import list_of_array_iterator
+from .dataset_utils import contiguous_list_of_array_iterator
 from .dataset_utils import character_sequence_iterator
 from .dataset_utils import word_sequence_iterator

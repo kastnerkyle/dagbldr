@@ -511,6 +511,13 @@ def softmax_activation(X):
     return out
 
 
+def np_softmax_activation(X):
+    # should work for both 2D and 3D
+    e_X = np.exp(X - X.max(axis=-1, keepdims=True))
+    out = e_X / e_X.sum(axis=-1, keepdims=True)
+    return out
+
+
 def _dropout(X, random_state, on_off_switch, p=0.):
     if p > 0:
         theano_seed = random_state.randint(-2147462579, 2147462579)
@@ -1039,6 +1046,7 @@ def embed(list_of_index_inputs, max_index, proj_dim, name=None,
     if name is None:
         name = get_name()
     embed_W_name = name + "_embed_W"
+    strict = True
     try:
         embed_W = get_shared(embed_W_name)
         if strict:
@@ -1057,3 +1065,39 @@ def embed(list_of_index_inputs, max_index, proj_dim, name=None,
         raise ValueError("Unsupported number of list_of_index_inputs, currently only supports 1 element")
     o = output.reshape((-1, index_input.shape[1], proj_dim * n_lists))
     return o
+
+
+def multiembed(list_of_index_inputs, n_embed, max_index, proj_dim, name=None,
+               random_state=None, init_func=np_unit_uniform):
+    if name is None:
+        name = get_name()
+
+    embeds = []
+    for i in range(n_embed):
+        name_i = name + "_%i" % i
+        e = embed([li[..., i] for li in list_of_index_inputs], max_index,
+                  proj_dim, name=name_i, random_state=random_state,
+                  init_func=init_func)
+        embeds.append(e)
+    return concatenate(embeds, axis=e.ndim - 1)
+
+
+def automask(list_of_index_inputs, n_mask):
+    """
+    n_mask should match list_of_index_inputs[i].shape[-1] for every i
+    """
+    masked = []
+    for i in range(n_mask):
+        masks = [0 * li for li in list_of_index_inputs]
+        if i > 0:
+            for mi in range(len(masks)):
+                ee = i * (masks[mi].shape[-1] // n_mask)
+                # safety check so we don't end up with no mask
+                ee = tensor.maximum(ee, 1)
+                ee = tensor.cast(ee, "int32")
+                masks[mi] = tensor.set_subtensor(masks[mi][..., :ee], 1.)
+        assert len(masks) == len(list_of_index_inputs)
+        mult = [msi * li for msi, li in zip(masks, list_of_index_inputs)]
+        r = concatenate(mult, axis=mult[0].ndim - 1)
+        masked.append(r)
+    return masked

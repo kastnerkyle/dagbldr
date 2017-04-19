@@ -151,6 +151,178 @@ class list_iterator(base_iterator):
             raise StopIteration("End of iteration")
 
 
+class list_of_array_iterator(base_iterator):
+    """ List of 2D arrays, with masks. """
+    def __init__(self, list_of_containers, minibatch_size,
+                 start_index=0,
+                 stop_index=np.inf,
+                 randomize=False,
+                 reshuffle_on_reset=False,
+                 random_state=None):
+        self.list_of_containers = list_of_containers
+        # all containers must be the same length
+        for li in list_of_containers:
+            assert len(li) == len(list_of_containers[0])
+        self.minibatch_size = minibatch_size
+
+        if start_index < 0:
+            start_index = len(list_of_containers[0]) + start_index
+
+        if start_index < 1:
+            start_index = int(start_index * len(list_of_containers[0]))
+        self.start_index = start_index
+
+        if stop_index < 0:
+            stop_index = len(list_of_containers[0]) + stop_index
+
+        if stop_index < 1:
+            stop_index = int(stop_index * len(list_of_containers[0]))
+
+        if stop_index > len(list_of_containers[0]):
+            stop_index = len(list_of_containers[0])
+        self.stop_index = stop_index
+
+        if self.stop_index - self.start_index < minibatch_size:
+            raise ValueError("Start, stop indices too close together (%i, %i)" % (start_index, stop_index))
+
+        self.randomize = randomize
+        self.reshuffle_on_reset = reshuffle_on_reset
+        if reshuffle_on_reset is not False:
+            raise ValueError("NYI")
+
+        self._idx = np.arange(len(list_of_containers[0]), dtype="int32")
+        self._current_offset = 0
+        self.random_state = random_state
+
+        if self.randomize:
+            assert self.random_state is not None
+            self.random_state.shuffle(self._idx)
+
+        self._idx = self._idx[self.start_index:self.stop_index]
+
+
+    def reset(self):
+        self._current_offset = 0
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        return self.__next__()
+
+    def __next__(self):
+        self._next_offset = self._current_offset + self.minibatch_size
+        if self._next_offset >= len(self._idx):
+            # TODO: Think about boundary issues with weird shaped last mb
+            self.reset()
+            raise StopIteration("Stop index reached")
+        ind = self._idx[self._current_offset:self._next_offset]
+        self._current_offset = self._next_offset
+        return self._slice_with_masks(ind)
+
+    def _slice_with_masks(self, ind):
+        try:
+            cs = [[lc[i] for i in ind] for lc in self.list_of_containers]
+            max_len = np.max([len(lci) for ci in cs for lci in ci])
+            empties = [np.zeros((max_len, self.minibatch_size, lc[0].shape[-1]), dtype=np.float32)
+                       for lc in self.list_of_containers]
+            ms = [np.ones_like(e[:, :, 0]) for e in empties]
+            for n in range(len(empties)):
+                for c, i in enumerate(ind):
+                    empties[n][:len(cs[n][c]), c] = cs[n][c]
+                    ms[n][len(cs[n][c]):, c] = 0.
+            return [i for sublist in list(zip(empties, ms)) for i in sublist]
+        except IndexError:
+            self.reset()
+            raise StopIteration("End of iteration")
+
+
+class contiguous_list_of_array_iterator(base_iterator):
+    """ List of 2D arrays, with masks. """
+    def __init__(self, list_of_containers, minibatch_size,
+                 truncation_length,
+                 start_index=0,
+                 stop_index=np.inf):
+        self.list_of_containers = list_of_containers
+        # all containers must be the same length
+        for li in list_of_containers:
+            assert len(li) == len(list_of_containers[0])
+        self.minibatch_size = minibatch_size
+
+        if start_index < 0:
+            start_index = len(list_of_containers[0]) + start_index
+
+        if start_index < 1:
+            start_index = int(start_index * len(list_of_containers[0]))
+        self.start_index = start_index
+
+        if stop_index < 0:
+            stop_index = len(list_of_containers[0]) + stop_index
+
+        if stop_index < 1:
+            stop_index = int(stop_index * len(list_of_containers[0]))
+
+        if stop_index > len(list_of_containers[0]):
+            stop_index = len(list_of_containers[0])
+        self.stop_index = stop_index
+
+        if self.stop_index - self.start_index < minibatch_size:
+            raise ValueError("Start, stop indices too close together (%i, %i)" % (start_index, stop_index))
+
+        self._joined_list_of_arrays = []
+        for c in range(len(list_of_containers)):
+            self._joined_list_of_arrays.append(np.concatenate(list_of_containers[c][start_index:stop_index], axis=0))
+
+        len_match = len(self._joined_list_of_arrays[0])
+        self.truncation_length = int(truncation_length)
+        tl = self.truncation_length
+        for c in range(len(list_of_containers)):
+            assert len(self._joined_list_of_arrays[c]) == len_match
+            la = self._joined_list_of_arrays[c]
+            if len_match % tl != 0:
+                diff = len_match // tl
+                assert diff > 0
+                new_len = diff * tl
+                la = la[:new_len]
+            if len(la.shape) == 2:
+                shp = la.shape
+                la = la.transpose(1, 0).reshape(shp[1], -1, truncation_length)
+                la = la.transpose(2, 1, 0)
+            else:
+                raise ValueError("shape of array unhandled")
+            self._joined_list_of_arrays[c] = la
+
+        self._total_minibatch_size = self._joined_list_of_arrays[0].shape[1]
+        self._chunk_size = self._total_minibatch_size // self.minibatch_size
+        c = np.arange(0, self.minibatch_size, dtype=np.int32)
+        self._offset_array = c * self._chunk_size
+        self._current_offset = 0
+
+    def reset(self):
+        self._current_offset = 0
+        c = np.arange(0, self.minibatch_size, dtype=np.int32)
+        self._offset_array = c * self._chunk_size
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        return self.__next__()
+
+    def __next__(self):
+        self._next_offset = self._current_offset + 1
+        if self._next_offset > self._chunk_size:
+            # TODO: Think about boundary issues with weird shaped last mb
+            self.reset()
+            raise StopIteration("Stop index reached")
+        parts = []
+        for c in range(len(self._joined_list_of_arrays)):
+            parts.append(self._joined_list_of_arrays[c][:, self._offset_array].astype("float32"))
+        self._current_offset += 1
+        self._offset_array += 1
+        return parts
+
+
 cap = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 lower = "abcdefghijklmnopqrstuvwxyz"
 alpha = "0123456789"
