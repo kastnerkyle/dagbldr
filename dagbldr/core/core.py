@@ -509,6 +509,38 @@ def fetch_checkpoint_dict(list_of_match_strings,
         if len(matches) == 1:
             best_match = matches[0]
         else:
+            # sort by import time
+            import datetime
+            import_times = []
+            for n, m in enumerate(matches):
+                with open(m) as f:
+                    r = json.load(f)
+                import_times.append(r['import_time'])
+
+            def mt(i):
+                # format is year-day-month_hour-minute-second
+                parts = map(int, i.split("_")[1].split("-") + i.split("_")[0].split("-"))
+                day = parts[1]
+                month = parts[2]
+                parts[1] = month
+                parts[2] = day
+                tt = datetime.datetime(*parts)
+                return (tt - datetime.datetime(1970,1,1)).total_seconds()
+
+            import_epoch_times = []
+            for it in import_times:
+                import_epoch_times.append(mt(it))
+
+            sorted_inds = np.argsort(import_epoch_times)[::-1]
+            final_import_times = []
+            final_matches = []
+            for si in sorted_inds:
+                final_import_times.append(import_times[si])
+                final_matches.append(matches[si])
+
+            matches = final_matches
+            import_times = final_import_times
+
             while True:
                 print("Multiple matches found for %s" % (str(list_of_match_strings)))
                 for n, m in enumerate(matches):

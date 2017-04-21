@@ -26,8 +26,8 @@ from dagbldr.datasets import list_of_array_iterator
 from dagbldr.datasets import fetch_bach_chorales_music21
 bach = fetch_bach_chorales_music21()
 
-n_timesteps = 50
-minibatch_size = 5
+n_epochs = 2350
+minibatch_size = 2
 # 4 pitches 4 durations
 order = 4
 n_in = 2 * order
@@ -71,18 +71,21 @@ duration_e = multiembed([A_sym[:, :, order:]], order, n_durations, n_dur_emb,
 X_pitch_e_sym = pitch_e[:-1]
 X_dur_e_sym = duration_e[:-1]
 
+X_mask_sym = A_mask_sym[:-1]
+
 X_fork = lstm_fork([X_pitch_e_sym, X_dur_e_sym],
                    [order * n_pitch_emb, order * n_dur_emb],
                    n_hid, name="lstm_fork_1", random_state=random_state)
 
 
-def step(in_t, h_tm1):
+def step(in_t, in_mask_t, h_tm1):
     h_t = lstm(in_t, h_tm1, [n_in], n_hid, name="lstm_1",
+               mask=in_mask_t,
                random_state=random_state)
     return h_t
 
 h, _ = theano.scan(step,
-                   sequences=[X_fork],
+                   sequences=[X_fork, X_mask_sym],
                    outputs_info=[h0])
 
 h_o = slice_state(h, n_hid)
@@ -95,8 +98,6 @@ ar_y_dur = automask([y_dur_e_sym], order)
 
 y_pitch_sym = A_sym[1:, :, :order]
 y_dur_sym = A_sym[1:, :, order:]
-
-X_mask_sym = A_mask_sym[:-1]
 
 pitch_lins = []
 dur_lins = []
@@ -113,7 +114,7 @@ for i in range(order):
     y_dur_pred = softmax_activation(y_dur_lin)
     dur_weight = float(n_pitches) / (n_pitches + n_durations)
 
-    dur_cost = dur_weight * categorical_crossentropy(y_dur_pred, y_dur_sym)
+    dur_cost = dur_weight * categorical_crossentropy(y_dur_pred, y_dur_sym[..., i])
     dur_cost = masked_cost(dur_cost, X_mask_sym).sum() / (X_mask_sym.sum() + 1.)
 
     y_pitch_lin = linear([h_o, ar_y_pitch[i], ar_y_dur[i]],
@@ -127,7 +128,7 @@ for i in range(order):
     pitch_weight = float(n_durations) / (n_pitches + n_durations)
 
     pitch_cost = pitch_weight * categorical_crossentropy(y_pitch_pred,
-                                                         y_pitch_sym)
+                                                         y_pitch_sym[..., i])
     pitch_cost = masked_cost(pitch_cost, X_mask_sym).sum() / (X_mask_sym.sum() + 1.)
 
     costs.append(dur_cost)
@@ -144,13 +145,10 @@ grads = gradient_clipping(grads, clip)
 opt = adam(params, learning_rate)
 updates = opt.updates(params, grads)
 
-debug_function = theano.function([A_sym, A_mask_sym, h0], ar_y_pitch + ar_y_dur)
-
-from IPython import embed; embed(); raise ValueError()
 fit_function = theano.function([A_sym, A_mask_sym, h0], [cost, h],
                                updates=updates)
 cost_function = theano.function([A_sym, A_mask_sym, h0], [cost, h])
-predict_function = theano.function([A_sym, h0],
+predict_function = theano.function([A_sym, A_mask_sym, h0],
                                    pitch_lins + dur_lins + [h])
 
 
@@ -174,12 +172,11 @@ def valid_loop(itr, info):
 
 checkpoint_dict = create_checkpoint_dict(locals())
 
-n_epochs = 500
 TL = TrainingLoop(train_loop, train_itr,
                   valid_loop, valid_itr,
                   n_epochs=n_epochs,
-                  checkpoint_every_n_seconds=30 * 60,
-                  checkpoint_every_n_epochs=50,
+                  checkpoint_every_n_seconds=30 * 60 * 60,
+                  checkpoint_every_n_epochs=5000,
                   checkpoint_dict=checkpoint_dict,
                   skip_minimums=True,
                   skip_most_recents=False)

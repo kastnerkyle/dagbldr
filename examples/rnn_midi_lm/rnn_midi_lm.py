@@ -154,10 +154,11 @@ def train_loop(itr, info):
 
 
 def valid_loop(itr, info):
+    global h0_init
     pitch_mb, dur_mb = next(itr)
     mb = np.concatenate((pitch_mb, dur_mb), axis=-1)
-    h0_init = np.zeros((minibatch_size, 2 * n_hid)).astype("float32")
     cost, h0_next = cost_function(mb, h0_init)
+    h0_init = h0_next[-1]
     return [cost]
 
 

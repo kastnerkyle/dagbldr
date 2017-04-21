@@ -133,8 +133,8 @@ def lstm(step_input, previous_state, list_of_input_dims, hidden_dim,
     if name is None:
         name = get_name()
 
-    if mask is not None:
-        raise ValueError("Mask support NYI for LSTM")
+    if mask is None:
+        mask = tensor.alloc(1., step_input.shape[0], 1)
     U_name = name + "_lstm_recurrent_U"
     input_dim = np.sum(list_of_input_dims)
     _, _, np_U = lstm_weights(input_dim, hidden_dim, random_state=random_state)
@@ -157,10 +157,10 @@ def lstm(step_input, previous_state, list_of_input_dims, hidden_dim,
     cg = tanh(_s(preactivation, 3))
 
     cg = fg * previous_cell + ig * cg
-    #cg = mask * cg + (1. - mask) * previous_cell
+    cg = mask[:, None] * cg + (1. - mask[:, None]) * previous_cell
 
     hg = og * tanh(cg)
-    #hg = mask * hg + (1. - mask) * previous_st
+    hg = mask[:, None] * hg + (1. - mask[:, None]) * previous_st
 
     next_state = concatenate([hg, cg], axis=1)
     return next_state

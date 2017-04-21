@@ -511,7 +511,9 @@ def softmax_activation(X):
     return out
 
 
-def np_softmax_activation(X):
+def np_softmax_activation(X, temperature=1.):
+    t = temperature
+    X = X / t
     # should work for both 2D and 3D
     e_X = np.exp(X - X.max(axis=-1, keepdims=True))
     out = e_X / e_X.sum(axis=-1, keepdims=True)
