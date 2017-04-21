@@ -10,6 +10,8 @@ import os
 from dagbldr.nodes import np_softmax_activation
 import copy
 
+# sample13 gotten from
+# leto52:/Tmp/kastner/dagbldr_models/rnn_midi_masked_lm_13-49-00_2017-20-04_45c5e7/45c5e7_model_checkpoint_2350.pkl
 def duration_and_pitch_to_pretty_midi(durations, pitches, add_to_name=0):
     import pretty_midi
     # BTAS mapping
