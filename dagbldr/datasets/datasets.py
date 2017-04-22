@@ -1235,21 +1235,6 @@ def fetch_iamondb():
     return pickle_dict
 
 
-def check_fetch_bach_chorales_music21():
-    """ Move files into dagbldr dir, in case python is on nfs. """
-    from music21 import corpus
-    all_bach_paths = corpus.getComposer("bach")
-    partial_path = get_dataset_dir("bach_chorales_music21")
-    for path in all_bach_paths:
-        if "riemenschneider" in path:
-            continue
-        filename = os.path.split(path)[-1]
-        local_path = os.path.join(partial_path, filename)
-        if not os.path.exists(local_path):
-            shutil.copy2(path, local_path)
-    return partial_path
-
-
 def music_21_to_pitch_duration(p):
     """
     Takes in a Music21 score, and outputs two numpy arrays
@@ -1292,6 +1277,186 @@ def music_21_to_pitch_duration(p):
             event_block[ix[0], i] = part_block[ix[0], ix[1]]
             etime_block[ix[0], i] = time_block[ix[0], ix[1]]
     return event_block, etime_block
+
+
+def check_fetch_symbtr_music21():
+    """ Check for symbtr data """
+    from music21 import corpus
+    # url = 'https://dl.dropboxusercontent.com/u/15378192/lovecraft_fiction.zip'
+    partial_path = get_dataset_dir("symbtr")
+    full_path = os.path.join(partial_path, "symbtr.zip")
+    if not os.path.exists(partial_path):
+        os.makedirs(partial_path)
+    if not os.path.exists(full_path):
+        raise ValueError("DOWNLOAD NOT YET SETUP")
+        download(url, full_path, progress_update_percentage=1)
+        zipf = zipfile.ZipFile(full_path, 'r')
+        zipf.extractall(partial_path)
+        zipf.close()
+    return partial_path
+
+
+def fetch_symbtr_music21():
+    """
+    SymbTr music, transposed to C major or C minor (depending on original key).
+    Only contains chorales with 4 voices populated.
+    Requires music21.
+
+    '''
+    n_timesteps : 34270
+    n_features : 1
+    n_classes : 12 (duration), 54 (pitch)
+    '''
+
+    Returns
+    -------
+    summary : dict
+        A dictionary cantaining data and image statistics.
+
+        summary["data_pitch"] : array, shape (34270, 1)
+            All pieces' pitches concatenated as an array
+        summary["data_duration"] : array, shape (34270, 1)
+            All pieces' durations concatenated as an array
+        summary["list_of_data_pitch"] : list of array
+            Pitches for each piece
+        summary["list_of_data_duration"] : list of array
+            Durations for each piece
+        summary["list_of_data_key"] : list of str
+            String key for each piece
+        summary["pitch_list"] : list, len 54
+        summary["duration_list"] : list, len 12
+        summary["major_minor_split"] : int, 16963
+            Index into data_pitch or data_duration to split for major and minor
+
+    Can split the data to only have major or minor key songs.
+    For major, summary["data_pitch"][:summary["major_minor_split"]]
+    For minor, summary["data_pitch"][summary["major_minor_split"]:]
+    The same operation works for duration.
+
+    pitch_list and duration_list give the mapping back from array value to
+    actual data value.
+    """
+
+    from music21 import converter, interval, pitch
+    data_path = check_fetch_symbtr_music21()
+
+    pickle_path = os.path.join(data_path, "__processed_symbtr.pkl")
+    if not os.path.exists(pickle_path):
+        logger.info("Pickled file %s not found, creating. This may take a few minutes..." % pickle_path)
+        all_transposed_pitch = []
+        all_transposed_duration = []
+        all_transposed_keys = []
+        files = sorted([fi for fi in os.listdir(data_path) if ".zip" not in fi])
+        for n, f in enumerate(files):
+            file_path = os.path.join(data_path, f)
+            try:
+                p = converter.parse(file_path)
+            except AttributeError:
+                logger.info("Parse failed for {}".format(f))
+                continue
+            except IndexError:
+                logger.info("Parse failed for {}".format(f))
+                continue
+            k = p.analyze("key")
+            p.keySignature = k
+            # cannot transpose? weird...
+            #i = interval.Interval(k.tonic, pitch.Pitch("C"))
+            #p = p.transpose(i)
+            #k = p.analyze("key")
+            key_shift = k.getTonic().pitchClass
+            try:
+                pitches, durations = music_21_to_pitch_duration(p)
+                pitches = pitches - key_shift
+                #if pitches.shape[0] != 4:
+                    #from IPython import embed; embed(); raise ValueError()
+                    #raise AttributeError("Too many voices, skipping...")
+                all_transposed_pitch.append(pitches)
+                all_transposed_duration.append(durations)
+                all_transposed_keys.append("C minor" if "minor" in k.name else "C major")
+            except AttributeError:
+                # Random chord? skip it
+                logger.info("Conversion failed for {}".format(f))
+                pass
+            if n % 25 == 0:
+                logger.info("Processed %s, progress %s / %s files complete" % (f, n + 1, len(files)))
+        d = {"data_pitch": all_transposed_pitch,
+             "data_duration": all_transposed_duration,
+             "data_key": all_transposed_keys}
+        with open(pickle_path, "wb") as f:
+            logger.info("Saving pickle file %s" % pickle_path)
+            pickle.dump(d, f)
+        logger.info("Pickle file %s saved" % pickle_path)
+    else:
+        with open(pickle_path, "rb") as f:
+            d = pickle.load(f)
+
+    major_pitch = []
+    minor_pitch = []
+    major_duration = []
+    minor_duration = []
+    for i in range(len(d["data_key"])):
+        k = d["data_key"][i]
+        ddp = d["data_pitch"][i]
+        ddd = d["data_duration"][i]
+        if k == "C major":
+            major_pitch.append(ddp)
+            major_duration.append(ddd)
+        elif k == "C minor":
+            minor_pitch.append(ddp)
+            minor_duration.append(ddd)
+        else:
+            raise ValueError("Unknown key %s" % k)
+
+    # now do preproc... and add things into the dict
+    dp = np.concatenate(major_pitch + minor_pitch, axis=1)
+    dd = np.concatenate(major_duration + minor_duration, axis=1)
+    major_minor_split = sum([m.shape[1] for m in major_pitch])
+
+    def replace_with_indices(arr, lu=None):
+        "Inplace but return reference"
+        if lu is None:
+            uniques = np.unique(arr)
+            classes = np.arange(len(uniques))
+            lu = {k: v for k, v in zip(uniques, classes)}
+
+        all_idx = [np.where(arr.ravel() == u)[0] for u in sorted(lu.keys())]
+
+        for u, idx in zip(sorted(lu.keys()), all_idx):
+            if len(idx) > 0:
+                arr.flat[idx] = lu[u]
+        return arr, lu
+
+    pitch_list = sorted(np.unique(dp))
+    duration_list = sorted(np.unique(dd))
+
+    dp, pitch_lu = replace_with_indices(dp)
+    dd, duration_lu = replace_with_indices(dd)
+    ldp = [replace_with_indices(dpi.T, pitch_lu)[0] for dpi in d["data_pitch"]]
+    ldd = [replace_with_indices(ddi.T, duration_lu)[0] for ddi in d["data_duration"]]
+    d = {"data_pitch": dp.transpose()[:, ::-1],
+         "data_duration": dd.transpose()[:, ::-1],
+         "list_of_data_pitch": ldp,
+         "list_of_data_duration": ldd,
+         "list_of_data_key": d["data_key"],
+         "pitch_list": pitch_list,
+         "duration_list": duration_list,
+         "major_minor_split": major_minor_split}
+    return d
+
+
+def check_fetch_bach_chorales_music21():
+    """ Move files into dagbldr dir, in case python is on nfs. """
+    from music21 import corpus
+    all_bach_paths = corpus.getComposer("bach")
+    partial_path = get_dataset_dir("bach_chorales_music21")
+    for path in all_bach_paths:
+        if "riemenschneider" in path:
+            continue
+        filename = os.path.split(path)[-1]
+        local_path = os.path.join(partial_path, filename)
+        if not os.path.exists(local_path):
+            shutil.copy2(path, local_path)
+    return partial_path
 
 
 def fetch_bach_chorales_music21():

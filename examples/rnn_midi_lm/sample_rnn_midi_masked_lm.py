@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 from dagbldr import fetch_checkpoint_dict
 from dagbldr.datasets import fetch_bach_chorales_music21
+from dagbldr.datasets import fetch_symbtr_music21
 from dagbldr.datasets import list_of_array_iterator
 import numpy as np
 
@@ -12,12 +13,20 @@ import copy
 
 # sample13 gotten from
 # leto52:/Tmp/kastner/dagbldr_models/rnn_midi_masked_lm_13-49-00_2017-20-04_45c5e7/45c5e7_model_checkpoint_2350.pkl
-def duration_and_pitch_to_pretty_midi(durations, pitches, add_to_name=0):
+
+# major model, bach
+# /u/kastner/dagbldr_lookup/1d6ba2_rnn_midi_masked_lm.json (06-43-35_2017-21-04)
+
+# minor mode, bach
+# /u/kastner/dagbldr_lookup/1bd8b6_rnn_midi_masked_lm.json (06-42-55_2017-21-04)
+
+def duration_and_pitch_to_pretty_midi(durations, pitches, add_to_name=0,
+                                      voice_mappings=["Sitar", "Orchestral Harp", "Acoustic Guitar (nylon)", "Pan Flute"],
+                                      voice_velocity=[60, 100, 100, 50],
+                                      voice_offset=[0, 0, 0, 12],
+                                      voice_decay=[1., 1., 1., .96]):
     import pretty_midi
     # BTAS mapping
-    voice_mappings = ["Sitar", "Orchestral Harp", "Acoustic Guitar (nylon)", "Pan Flute"]
-    voice_velocity = [60, 100, 100, 50]
-    voice_offset = [0, 0, 0, 12]
     len_durations = len(durations)
     order = durations.shape[-1]
     n_samples = durations.shape[1]
@@ -45,7 +54,7 @@ def duration_and_pitch_to_pretty_midi(durations, pitches, add_to_name=0):
                 if p == -1:
                     continue
                 s = time_offset[jj]
-                e = time_offset[jj] + d
+                e = time_offset[jj] + voice_decay[jj] * d
                 time_offset[jj] += d
                 note = pretty_midi.Note(velocity=voice_velocity[jj],
                                         pitch=p + voice_offset[jj],
@@ -61,10 +70,10 @@ def duration_and_pitch_to_pretty_midi(durations, pitches, add_to_name=0):
 parser = argparse.ArgumentParser(description="Sample audio from saved model")
 args = parser.parse_args()
 
-bach = fetch_bach_chorales_music21()
+#bach = fetch_bach_chorales_music21()
+mu = fetch_symbtr_music21()
 
-# 4 pitches 4 durations
-order = 4
+order = mu["list_of_data_pitch"][0].shape[-1]
 n_in = 2 * order
 n_pitch_emb = 20
 n_dur_emb = 4
@@ -78,13 +87,13 @@ prime_step = 10
 temperature = .1
 deterministic = False
 
-n_pitches = len(bach["pitch_list"])
-n_durations = len(bach["duration_list"])
+n_pitches = len(mu["pitch_list"])
+n_durations = len(mu["duration_list"])
 
 random_state = np.random.RandomState(1999)
 
-lp = bach["list_of_data_pitch"]
-ld = bach["list_of_data_duration"]
+lp = mu["list_of_data_pitch"]
+ld = mu["list_of_data_duration"]
 
 checkpoint_dict = fetch_checkpoint_dict(["rnn_midi_masked_lm"])
 predict_function = checkpoint_dict["predict_function"]
@@ -150,8 +159,8 @@ for i in range(n_reps):
 
     pitch_where = []
     duration_where = []
-    pl = bach['pitch_list']
-    dl = bach['duration_list']
+    pl = mu['pitch_list']
+    dl = mu['duration_list']
     pitch_mb = mb[:, :, :order]
     duration_mb = mb[:, :, order:]
     for n, pli in enumerate(pl):

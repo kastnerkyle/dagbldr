@@ -23,25 +23,41 @@ from dagbldr.optimizers import gradient_clipping
 from dagbldr.training import TrainingLoop
 from dagbldr.datasets import list_of_array_iterator
 
-from dagbldr.datasets import fetch_bach_chorales_music21
-bach = fetch_bach_chorales_music21()
+from dagbldr.datasets import fetch_symbtr_music21
 
-n_epochs = 2350
+'''
+from dagbldr.datasets import fetch_bach_chorales_music21
+mu = fetch_bach_chorales_music21()
+'''
+
+mu = fetch_symbtr_music21()
+
+n_epochs = 1850
 minibatch_size = 2
-# 4 pitches 4 durations
-order = 4
+order = mu["list_of_data_pitch"][0].shape[-1]
 n_in = 2 * order
 
-n_pitches = len(bach["pitch_list"])
-n_durations = len(bach["duration_list"])
+n_pitches = len(mu["pitch_list"])
+n_durations = len(mu["duration_list"])
 
 random_state = np.random.RandomState(1999)
 n_pitch_emb = 20
 n_dur_emb = 4
 n_hid = 64
+key = "major"
 
-lp = bach["list_of_data_pitch"]
-ld = bach["list_of_data_duration"]
+lp = mu["list_of_data_pitch"]
+ld = mu["list_of_data_duration"]
+
+lip = []
+lid = []
+for n, k in enumerate(mu["list_of_data_key"]):
+    if key in k:
+        lip.append(lp[n])
+        lid.append(ld[n])
+lp = lip
+ld = lid
+
 train_itr = list_of_array_iterator([lp, ld], minibatch_size, stop_index=.9,
                                    randomize=True, random_state=random_state)
 
@@ -150,7 +166,7 @@ fit_function = theano.function([A_sym, A_mask_sym, h0], [cost, h],
 cost_function = theano.function([A_sym, A_mask_sym, h0], [cost, h])
 predict_function = theano.function([A_sym, A_mask_sym, h0],
                                    pitch_lins + dur_lins + [h])
-
+raise ValueError()
 
 def train_loop(itr, info):
     pitch_mb, pitch_mask, dur_mb, dur_mask = next(itr)
