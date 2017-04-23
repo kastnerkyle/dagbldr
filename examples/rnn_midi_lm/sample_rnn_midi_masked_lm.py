@@ -3,6 +3,8 @@ from dagbldr import fetch_checkpoint_dict
 from dagbldr.datasets import fetch_bach_chorales_music21
 from dagbldr.datasets import fetch_symbtr_music21
 from dagbldr.datasets import list_of_array_iterator
+from dagbldr.datasets import pitches_and_durations_to_pretty_midi
+from dagbldr.datasets import dump_midi_player_template
 import numpy as np
 
 import argparse
@@ -20,67 +22,11 @@ import copy
 # minor mode, bach
 # /u/kastner/dagbldr_lookup/1bd8b6_rnn_midi_masked_lm.json (06-42-55_2017-21-04)
 
-def duration_and_pitch_to_pretty_midi(durations, pitches, name_tag="sample_{}.mid",
-                                      add_to_name=0, voice_mappings="woodwinds"):
-    import pretty_midi
-    # BTAS mapping
-    if voice_mappings == "weird":
-        voice_mappings = ["Sitar", "Orchestral Harp", "Acoustic Guitar (nylon)", "Pan Flute"]
-        voice_velocity = [60, 100, 100, 50]
-        voice_offset = [0, 0, 0, 12]
-        voice_decay = [1., 1., 1., .96]
-    elif voice_mappings == "woodwinds":
-        voice_mappings = ["Bassoon", "Clarinet", "English Horn", "Oboe"]
-        voice_velocity = [100, 100, 100, 100]
-        voice_offset = [0, 0, 0, 12]
-        voice_decay = [1., 1., 1., 1.]
-    else:
-        raise ValueError("Unknown voice mapping specified")
-    len_durations = len(durations)
-    order = durations.shape[-1]
-    n_samples = durations.shape[1]
-    assert len(durations) == len(pitches)
-    for ss in range(n_samples):
-        pm_obj = pretty_midi.PrettyMIDI()
-        # Create an Instrument instance for a cello instrument
-        def mkpm(name):
-            return pretty_midi.instrument_name_to_program(name)
-
-        def mki(p):
-            return pretty_midi.Instrument(program=p)
-
-        pm_programs = [mkpm(n) for n in voice_mappings]
-        pm_instruments = [mki(p) for p in pm_programs]
-        time_offset = np.zeros((order,))
-        for ii in range(len_durations):
-            for jj in range(order):
-                pitches_isj = pitches[ii, ss, jj]
-                durations_isj = durations[ii, ss, jj]
-                p = int(pitches_isj)
-                d = durations_isj
-                if d == -1:
-                    continue
-                if p == -1:
-                    continue
-                s = time_offset[jj]
-                e = time_offset[jj] + voice_decay[jj] * d
-                time_offset[jj] += d
-                note = pretty_midi.Note(velocity=voice_velocity[jj],
-                                        pitch=p + voice_offset[jj],
-                                        start=s, end=e)
-                # Add it to our cello instrument
-                pm_instruments[jj].notes.append(note)
-        # Add the cello instrument to the PrettyMIDI object
-        for pm_instrument in pm_instruments:
-            pm_obj.instruments.append(pm_instrument)
-        # Write out the MIDI data
-        pm_obj.write(name_tag.format(ss + add_to_name))
-
 parser = argparse.ArgumentParser(description="Sample audio from saved model")
 args = parser.parse_args()
 
-#bach = fetch_bach_chorales_music21()
-mu = fetch_symbtr_music21()
+mu = fetch_bach_chorales_music21()
+#mu = fetch_symbtr_music21()
 
 order = mu["list_of_data_pitch"][0].shape[-1]
 n_in = 2 * order
@@ -105,6 +51,7 @@ lp = mu["list_of_data_pitch"]
 ld = mu["list_of_data_duration"]
 
 checkpoint_dict = fetch_checkpoint_dict(["rnn_midi_masked_lm"])
+raise ValueError()
 predict_function = checkpoint_dict["predict_function"]
 
 train_itr = list_of_array_iterator([lp, ld], minibatch_size, stop_index=.9,
@@ -184,11 +131,10 @@ for i in range(n_reps):
     for n, dw in enumerate(duration_where):
         duration_mb[dw] = dl[n]
 
-    if not os.path.exists("midi_samples"):
-        os.mkdir("midi_samples")
-    os.chdir("midi_samples")
-    duration_and_pitch_to_pretty_midi(duration_mb, pitch_mb,
-                                      name_tag="masked_sample_{}.mid",
-                                      add_to_name=i * mb.shape[1])
+    if not os.path.exists("samples"):
+        os.mkdir("samples")
+    os.chdir("samples")
+    pitches_and_durations_to_pretty_midi(duration_mb, pitch_mb,
+                                         name_tag="masked_sample_{}.mid",
+                                         add_to_name=i * mb.shape[1])
     dump_midi_player_template()
-    os.chdir("..")

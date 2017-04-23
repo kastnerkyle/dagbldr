@@ -45,7 +45,7 @@ random_state = np.random.RandomState(1999)
 n_pitch_emb = 20
 n_dur_emb = 4
 n_hid = 64
-key = "major"
+key = "minor"
 
 lp = mu["list_of_data_pitch"]
 ld = mu["list_of_data_duration"]
@@ -61,6 +61,33 @@ ld = lid
 
 train_itr = list_of_array_iterator([lp, ld], minibatch_size, stop_index=.9,
                                    randomize=True, random_state=random_state)
+
+"""
+# first minibatch cases mido to barf?
+pitch_mb, pitch_mask, dur_mb, dur_mask = next(train_itr)
+pitch_mb, pitch_mask, dur_mb, dur_mask = next(train_itr)
+from dagbldr.datasets import pitches_and_durations_to_pretty_midi
+from dagbldr.datasets import dump_midi_player_template
+pitch_where = []
+dur_where = []
+pl = mu['pitch_list']
+dl = mu['duration_list']
+for n, pli in enumerate(pl):
+    pitch_where.append(np.where(pitch_mb == n))
+
+for n, dli in enumerate(dl):
+    dur_where.append(np.where(dur_mb == n))
+
+for n, pw in enumerate(pitch_where):
+    pitch_mb[pw] = pl[n]
+
+for n, dw in enumerate(dur_where):
+    dur_mb[dw] = dl[n]
+
+pitches_and_durations_to_pretty_midi(pitch_mb, dur_mb)
+dump_midi_player_template()
+raise ValueError()
+"""
 
 valid_itr = list_of_array_iterator([lp, ld], minibatch_size, start_index=.9,
                                    randomize=True, random_state=random_state)

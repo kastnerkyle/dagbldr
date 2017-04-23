@@ -1393,7 +1393,7 @@ def _musicxml_extract(data_path, pickle_path, mxl_ext=".xml"):
     max_count = -1
     max_note = -1
     for ni in n_notes:
-        r = np.sum(0. * np.where(shps0 == 1)[0] + 1)
+        r = np.sum(0. * np.where(shps0 == ni)[0] + 1)
         if r > max_count:
             max_count = r
             max_note = ni
@@ -1426,8 +1426,10 @@ def _musicxml_extract(data_path, pickle_path, mxl_ext=".xml"):
 
     dp, pitch_lu = replace_with_indices(dp)
     dd, duration_lu = replace_with_indices(dd)
-    ldp = [replace_with_indices(dpi.T, pitch_lu)[0] for dpi in all_pitches]
-    ldd = [replace_with_indices(ddi.T, duration_lu)[0] for ddi in all_durations]
+    ldp = [replace_with_indices(dpi.T, pitch_lu)[0][:, ::-1]
+           for dpi in all_pitches]
+    ldd = [replace_with_indices(ddi.T, duration_lu)[0][:, ::-1]
+           for ddi in all_durations]
     d = {"list_of_data_pitch": ldp,
          "list_of_data_duration": ldd,
          "list_of_data_key": all_keys,
@@ -1556,7 +1558,7 @@ def fetch_bach_chorales_music21():
 
     data_path = check_fetch_bach_chorales_music21()
     pickle_path = os.path.join(data_path, "__processed_bach.pkl")
-    return _musicxml_extract(data_path, pickle_path)
+    return _musicxml_extract(data_path, pickle_path, mxl_ext=".mxl")
 
 
 def check_fetch_wikifonia_music21():
@@ -1617,3 +1619,82 @@ def fetch_wikifonia_music21():
     data_path = check_fetch_wikifonia_music21()
     pickle_path = os.path.join(data_path, "__processed_wikifonia.pkl")
     return _musicxml_extract(data_path, pickle_path, mxl_ext=".mxl")
+
+
+def pitches_and_durations_to_pretty_midi(pitches, durations,
+                                         save_dir="samples",
+                                         name_tag="sample_{}.mid",
+                                         add_to_name=0,
+                                         voice_mappings="woodwinds"):
+    import pretty_midi
+    # BTAS mapping
+    if voice_mappings == "weird":
+        voice_mappings = ["Sitar", "Orchestral Harp", "Acoustic Guitar (nylon)", "Pan Flute"]
+        voice_velocity = [60, 100, 100, 50]
+        voice_offset = [0, 0, 0, 12]
+        voice_decay = [1., 1., 1., .96]
+    elif voice_mappings == "woodwinds":
+        voice_mappings = ["Bassoon", "Clarinet", "English Horn", "Oboe"]
+        voice_velocity = [80, 80, 80, 80]
+        voice_offset = [0, 0, 0, 0]
+        voice_decay = [1., 1., 1., 1.]
+    else:
+        raise ValueError("Unknown voice mapping specified")
+    len_durations = len(durations)
+    order = durations.shape[-1]
+    n_samples = durations.shape[1]
+    assert len(durations) == len(pitches)
+    for ss in range(n_samples):
+        pm_obj = pretty_midi.PrettyMIDI()
+        # Create an Instrument instance for a cello instrument
+        def mkpm(name):
+            return pretty_midi.instrument_name_to_program(name)
+
+        def mki(p):
+            return pretty_midi.Instrument(program=p)
+
+        pm_programs = [mkpm(n) for n in voice_mappings]
+        pm_instruments = [mki(p) for p in pm_programs]
+        time_offset = np.zeros((order,))
+        for ii in range(len_durations):
+            for jj in range(order):
+                pitches_isj = pitches[ii, ss, jj]
+                durations_isj = durations[ii, ss, jj]
+                p = int(pitches_isj)
+                d = durations_isj
+                if d == -1:
+                    continue
+                if p == -1:
+                    continue
+                s = time_offset[jj]
+                e = time_offset[jj] + voice_decay[jj] * d
+                time_offset[jj] += d
+                note = pretty_midi.Note(velocity=voice_velocity[jj],
+                                        pitch=p + voice_offset[jj],
+                                        start=s, end=e)
+                # Add it to our instrument
+                pm_instruments[jj].notes.append(note)
+        # Add the instrument to the PrettyMIDI object
+        for pm_instrument in pm_instruments:
+            pm_obj.instruments.append(pm_instrument)
+        # Write out the MIDI data
+        sv = save_dir + os.sep + name_tag.format(ss + add_to_name)
+        pm_obj.write(sv)
+
+
+def check_fetch_midi_template():
+    partial_path = get_dataset_dir("midi_template")
+    full_path = os.path.join(partial_path, "midi_template.zip")
+    if not os.path.exists(partial_path):
+        os.makedirs(partial_path)
+    if not os.path.exists(full_path):
+        url = "https://www.dropbox.com/s/w23hlsw778kyeno/midi_template.zip?dl=1"
+        download(url, full_path, progress_update_percentage=1)
+    return full_path
+
+
+def dump_midi_player_template(save_dir="samples"):
+    full_path = check_fetch_midi_template()
+    zipf = zipfile.ZipFile(full_path, 'r')
+    zipf.extractall(save_dir)
+    zipf.close()

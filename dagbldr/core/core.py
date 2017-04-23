@@ -546,15 +546,43 @@ def fetch_checkpoint_dict(list_of_match_strings,
                 for n, m in enumerate(matches):
                     with open(m) as f:
                        r = json.load(f)
-                    print("%i : %s (%s)" % (n, m, r['import_time']))
-                line = raw_input('Prompt ("Ctrl-C" to quit): ')
+                    if "extra_info" in r.keys():
+                        if r["extra_info"] != "":
+                            print("%i : %s (%s); %s" % (n, m, r['import_time'], r['extra_info']))
+                        else:
+                            print("%i : %s (%s)" % (n, m, r['import_time']))
+                    elif "extra_info" not in r.keys():
+                        print("%i : %s (%s)" % (n, m, r['import_time']))
+                line = raw_input('Prompt ("e0" through "eX" to edit info, "Ctrl-C" to quit): ')
                 try:
                     idx = int(line)
                     if idx in list(range(len(matches))):
                         print("Selected index %i : %s" % (idx, matches[idx]))
                         break
                 except:
-                    pass
+                    cmd = line.strip()
+                    if cmd[0] == "e":
+                        idx = int(cmd[1:])
+                        if idx in list(range(len(matches))):
+                            with open(matches[idx]) as f:
+                                r = json.load(f)
+                            nl = raw_input('Type information to add for extra_info of element {}\n'.format(idx))
+                            if "extra_info" in r.keys():
+                                if r["extra_info"].strip() != "":
+                                    resp = raw_input('Entry has previous information, do you really want to overwrite? (Type y and press enter to confirm)\n')
+                                    resp = resp.strip()
+                                else:
+                                    resp = "y"
+                            else:
+                                resp = "y"
+
+                            if resp != "y":
+                                continue
+                            r["extra_info"] = nl.strip()
+                            with open(matches[idx], 'w') as f:
+                                json.dump(r, f)
+                    print('Editing complete')
+                    continue
                 print('Selection invalid : "%s"' % line)
                 print('Try again!')
             best_match = matches[idx]
