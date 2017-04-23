@@ -1250,7 +1250,10 @@ def music_21_to_pitch_duration(p):
             if n.isRest:
                 part.append(0)
             else:
-                part.append(n.midi)
+                try:
+                    part.append(n.midi)
+                except AttributeError:
+                    continue
             part_time.append(n.duration.quarterLength)
         parts.append(part)
         parts_times.append(part_time)
@@ -1279,10 +1282,165 @@ def music_21_to_pitch_duration(p):
     return event_block, etime_block
 
 
+def _musicxml_extract(data_path, pickle_path, mxl_ext=".xml"):
+    from music21 import converter, interval, pitch, harmony, analysis, spanner
+    if not os.path.exists(pickle_path):
+        logger.info("Pickled file %s not found, creating. This may take a few minutes..." % pickle_path)
+        all_transposed_pitch = []
+        all_transposed_duration = []
+        all_transposed_keys = []
+        all_file_names = []
+        files = sorted([fi for fi in os.listdir(data_path) if mxl_ext in fi[-len(mxl_ext):]])
+        for n, f in enumerate(files):
+            file_path = os.path.join(data_path, f)
+            try:
+                p = converter.parse(file_path)
+                k = p.analyze("key")
+            except (AttributeError, IndexError, UnicodeDecodeError,
+                    UnicodeEncodeError, harmony.ChordStepModificationException,
+                    ZeroDivisionError,
+                    analysis.discrete.DiscreteAnalysisException,
+                    pitch.PitchException,
+                    spanner.SpannerException) as err:
+                logger.info("Parse failed for {}".format(f))
+                continue
+
+            p.keySignature = k
+            # cannot transpose? weird...
+            #i = interval.Interval(k.tonic, pitch.Pitch("C"))
+            #p = p.transpose(i)
+            #k = p.analyze("key")
+            key_shift = k.getTonic().pitchClass
+            #try:
+            pitches, durations = music_21_to_pitch_duration(p)
+            pitches = pitches - key_shift
+            #if pitches.shape[0] != 4:
+                #from IPython import embed; embed(); raise ValueError()
+                #raise AttributeError("Too many voices, skipping...")
+            all_transposed_pitch.append(pitches)
+            all_transposed_duration.append(durations)
+            all_transposed_keys.append("C minor" if "minor" in k.name else "C major")
+            all_file_names.append(f)
+            #except AttributeError:
+                # Random chord? skip it
+            #    logger.info("Conversion failed for {}".format(f))
+            #    pass
+            if n % 25 == 0:
+                logger.info("Processed %s, progress %s / %s files complete" % (f, n + 1, len(files)))
+        d = {"data_pitch": all_transposed_pitch,
+             "data_duration": all_transposed_duration,
+             "data_key": all_transposed_keys,
+             "file_names": all_file_names}
+        with open(pickle_path, "wb") as f:
+            logger.info("Saving pickle file %s" % pickle_path)
+            pickle.dump(d, f)
+        logger.info("Pickle file %s saved" % pickle_path)
+    else:
+        with open(pickle_path, "rb") as f:
+            d = pickle.load(f)
+
+    major_pitch = []
+    minor_pitch = []
+
+    major_duration = []
+    minor_duration = []
+
+    major_filename = []
+    minor_filename = []
+
+    keys = []
+    for i in range(len(d["data_key"])):
+        k = d["data_key"][i]
+        ddp = d["data_pitch"][i]
+        ddd = d["data_duration"][i]
+        nm = d["file_names"][i]
+        if k == "C major":
+            major_pitch.append(ddp)
+            major_duration.append(ddd)
+            major_filename.append(nm)
+            keys.append("C major")
+        elif k == "C minor":
+            minor_pitch.append(ddp)
+            minor_duration.append(ddd)
+            minor_filename.append(nm)
+            keys.append("C minor")
+        else:
+            raise ValueError("Unknown key %s" % k)
+
+
+    def replace_with_indices(arr, lu=None):
+        "Inplace but return reference"
+        if lu is None:
+            uniques = np.unique(arr)
+            classes = np.arange(len(uniques))
+            lu = {k: v for k, v in zip(uniques, classes)}
+
+        all_idx = [np.where(arr.ravel() == u)[0] for u in sorted(lu.keys())]
+
+        for u, idx in zip(sorted(lu.keys()), all_idx):
+            if len(idx) > 0:
+                arr.flat[idx] = lu[u]
+        return arr, lu
+
+    all_pitches = major_pitch + minor_pitch
+    all_durations = major_duration + minor_duration
+    all_filenames = major_filename + minor_filename
+    shps = [ap.shape for ap in all_pitches]
+    shps0 = np.array([shpsi[0] for shpsi in shps])
+    n_notes = np.unique(shps0)
+
+    # find max
+    max_count = -1
+    max_note = -1
+    for ni in n_notes:
+        r = np.sum(0. * np.where(shps0 == 1)[0] + 1)
+        if r > max_count:
+            max_count = r
+            max_note = ni
+
+    final_pitches = []
+    final_durations = []
+    final_filenames = []
+    final_keys = []
+    for i in range(len(all_pitches)):
+        n = all_pitches[i].shape[0]
+        if n == max_note:
+            final_pitches.append(all_pitches[i])
+            final_durations.append(all_durations[i])
+            final_filenames.append(all_filenames[i])
+            final_keys.append(keys[i])
+        else:
+            logger.info("Skipping file {}: {} had invalid note count != {}".format(
+                i, all_filenames[i], max_note))
+
+    all_pitches = final_pitches
+    all_durations = final_durations
+    all_filenames = final_filenames
+    all_keys = final_keys
+
+    dp = np.concatenate(all_pitches, axis=1)
+    dd = np.concatenate(all_durations, axis=1)
+
+    pitch_list = list(np.unique(dp))
+    duration_list = list(np.unique(dd))
+
+    dp, pitch_lu = replace_with_indices(dp)
+    dd, duration_lu = replace_with_indices(dd)
+    ldp = [replace_with_indices(dpi.T, pitch_lu)[0] for dpi in all_pitches]
+    ldd = [replace_with_indices(ddi.T, duration_lu)[0] for ddi in all_durations]
+    d = {"list_of_data_pitch": ldp,
+         "list_of_data_duration": ldd,
+         "list_of_data_key": all_keys,
+         "pitch_list": pitch_list,
+         "duration_list": duration_list,
+         "filename_list": all_filenames}
+    return d
+
+
 def check_fetch_symbtr_music21():
     """ Check for symbtr data """
+    # https://github.com/kastnerkyle/SymbTr
     from music21 import corpus
-    # url = 'https://dl.dropboxusercontent.com/u/15378192/lovecraft_fiction.zip'
     partial_path = get_dataset_dir("symbtr")
     full_path = os.path.join(partial_path, "symbtr.zip")
     if not os.path.exists(partial_path):
@@ -1337,111 +1495,9 @@ def fetch_symbtr_music21():
     actual data value.
     """
 
-    from music21 import converter, interval, pitch
     data_path = check_fetch_symbtr_music21()
-
     pickle_path = os.path.join(data_path, "__processed_symbtr.pkl")
-    if not os.path.exists(pickle_path):
-        logger.info("Pickled file %s not found, creating. This may take a few minutes..." % pickle_path)
-        all_transposed_pitch = []
-        all_transposed_duration = []
-        all_transposed_keys = []
-        files = sorted([fi for fi in os.listdir(data_path) if ".zip" not in fi])
-        for n, f in enumerate(files):
-            file_path = os.path.join(data_path, f)
-            try:
-                p = converter.parse(file_path)
-            except AttributeError:
-                logger.info("Parse failed for {}".format(f))
-                continue
-            except IndexError:
-                logger.info("Parse failed for {}".format(f))
-                continue
-            k = p.analyze("key")
-            p.keySignature = k
-            # cannot transpose? weird...
-            #i = interval.Interval(k.tonic, pitch.Pitch("C"))
-            #p = p.transpose(i)
-            #k = p.analyze("key")
-            key_shift = k.getTonic().pitchClass
-            try:
-                pitches, durations = music_21_to_pitch_duration(p)
-                pitches = pitches - key_shift
-                #if pitches.shape[0] != 4:
-                    #from IPython import embed; embed(); raise ValueError()
-                    #raise AttributeError("Too many voices, skipping...")
-                all_transposed_pitch.append(pitches)
-                all_transposed_duration.append(durations)
-                all_transposed_keys.append("C minor" if "minor" in k.name else "C major")
-            except AttributeError:
-                # Random chord? skip it
-                logger.info("Conversion failed for {}".format(f))
-                pass
-            if n % 25 == 0:
-                logger.info("Processed %s, progress %s / %s files complete" % (f, n + 1, len(files)))
-        d = {"data_pitch": all_transposed_pitch,
-             "data_duration": all_transposed_duration,
-             "data_key": all_transposed_keys}
-        with open(pickle_path, "wb") as f:
-            logger.info("Saving pickle file %s" % pickle_path)
-            pickle.dump(d, f)
-        logger.info("Pickle file %s saved" % pickle_path)
-    else:
-        with open(pickle_path, "rb") as f:
-            d = pickle.load(f)
-
-    major_pitch = []
-    minor_pitch = []
-    major_duration = []
-    minor_duration = []
-    for i in range(len(d["data_key"])):
-        k = d["data_key"][i]
-        ddp = d["data_pitch"][i]
-        ddd = d["data_duration"][i]
-        if k == "C major":
-            major_pitch.append(ddp)
-            major_duration.append(ddd)
-        elif k == "C minor":
-            minor_pitch.append(ddp)
-            minor_duration.append(ddd)
-        else:
-            raise ValueError("Unknown key %s" % k)
-
-    # now do preproc... and add things into the dict
-    dp = np.concatenate(major_pitch + minor_pitch, axis=1)
-    dd = np.concatenate(major_duration + minor_duration, axis=1)
-    major_minor_split = sum([m.shape[1] for m in major_pitch])
-
-    def replace_with_indices(arr, lu=None):
-        "Inplace but return reference"
-        if lu is None:
-            uniques = np.unique(arr)
-            classes = np.arange(len(uniques))
-            lu = {k: v for k, v in zip(uniques, classes)}
-
-        all_idx = [np.where(arr.ravel() == u)[0] for u in sorted(lu.keys())]
-
-        for u, idx in zip(sorted(lu.keys()), all_idx):
-            if len(idx) > 0:
-                arr.flat[idx] = lu[u]
-        return arr, lu
-
-    pitch_list = sorted(np.unique(dp))
-    duration_list = sorted(np.unique(dd))
-
-    dp, pitch_lu = replace_with_indices(dp)
-    dd, duration_lu = replace_with_indices(dd)
-    ldp = [replace_with_indices(dpi.T, pitch_lu)[0] for dpi in d["data_pitch"]]
-    ldd = [replace_with_indices(ddi.T, duration_lu)[0] for ddi in d["data_duration"]]
-    d = {"data_pitch": dp.transpose()[:, ::-1],
-         "data_duration": dd.transpose()[:, ::-1],
-         "list_of_data_pitch": ldp,
-         "list_of_data_duration": ldd,
-         "list_of_data_key": d["data_key"],
-         "pitch_list": pitch_list,
-         "duration_list": duration_list,
-         "major_minor_split": major_minor_split}
-    return d
+    return _musicxml_extract(data_path, pickle_path)
 
 
 def check_fetch_bach_chorales_music21():
@@ -1498,94 +1554,66 @@ def fetch_bach_chorales_music21():
     actual data value.
     """
 
-    from music21 import converter, interval, pitch
     data_path = check_fetch_bach_chorales_music21()
     pickle_path = os.path.join(data_path, "__processed_bach.pkl")
-    if not os.path.exists(pickle_path):
-        logger.info("Pickled file %s not found, creating. This may take a few minutes..." % pickle_path)
-        all_transposed_bach_pitch = []
-        all_transposed_bach_duration = []
-        all_transposed_keys = []
-        files = sorted(os.listdir(data_path))
-        for n, f in enumerate(files):
-            file_path = os.path.join(data_path, f)
-            p = converter.parse(file_path)
-            k = p.analyze("key")
-            i = interval.Interval(k.tonic, pitch.Pitch("C"))
-            p = p.transpose(i)
-            k = p.analyze("key")
-            try:
-                pitches, durations = music_21_to_pitch_duration(p)
-                if pitches.shape[0] != 4:
-                    raise AttributeError("Too many voices, skipping...")
-                all_transposed_bach_pitch.append(pitches)
-                all_transposed_bach_duration.append(durations)
-                all_transposed_keys.append(k.name)
-            except AttributeError:
-                # Random chord? skip it
-                pass
-            if n % 25 == 0:
-                logger.info("Processed %s, progress %s / %s files complete" % (f, n + 1, len(files)))
-        d = {"data_pitch": all_transposed_bach_pitch,
-             "data_duration": all_transposed_bach_duration,
-             "data_key": all_transposed_keys}
-        with open(pickle_path, "wb") as f:
-            logger.info("Saving pickle file %s" % pickle_path)
-            pickle.dump(d, f)
-        logger.info("Pickle file %s saved" % pickle_path)
-    else:
-        with open(pickle_path, "rb") as f:
-            d = pickle.load(f)
+    return _musicxml_extract(data_path, pickle_path)
 
-    major_pitch = []
-    minor_pitch = []
-    major_duration = []
-    minor_duration = []
-    for i in range(len(d["data_key"])):
-        k = d["data_key"][i]
-        ddp = d["data_pitch"][i]
-        ddd = d["data_duration"][i]
-        if k == "C major":
-            major_pitch.append(ddp)
-            major_duration.append(ddd)
-        elif k == "C minor":
-            minor_pitch.append(ddp)
-            minor_duration.append(ddd)
-        else:
-            raise ValueError("Unknown key %s" % k)
 
-    # now do preproc... and add things into the dict
-    dp = np.concatenate(major_pitch + minor_pitch, axis=1)
-    dd = np.concatenate(major_duration + minor_duration, axis=1)
-    major_minor_split = sum([m.shape[1] for m in major_pitch])
+def check_fetch_wikifonia_music21():
+    # http://www.synthzone.com/forum/ubbthreads.php/topics/384909/Download_for_Wikifonia_all_6_6
+    partial_path = get_dataset_dir("wikifonia")
+    full_path = os.path.join(partial_path, "wikifonia.zip")
+    if not os.path.exists(partial_path):
+        os.makedirs(partial_path)
+    if not os.path.exists(full_path):
+        raise ValueError("DOWNLOAD NOT YET SETUP")
+        download(url, full_path, progress_update_percentage=1)
+        zipf = zipfile.ZipFile(full_path, 'r')
+        zipf.extractall(partial_path)
+        zipf.close()
+    final_path = os.path.join(partial_path, "Wikifonia")
+    return final_path
 
-    def replace_with_indices(arr, lu=None):
-        "Inplace but return reference"
-        if lu is None:
-            uniques = np.unique(arr)
-            classes = np.arange(len(uniques))
-            lu = {k: v for k, v in zip(uniques, classes)}
 
-        all_idx = [np.where(arr.ravel() == u)[0] for u in sorted(lu.keys())]
+def fetch_wikifonia_music21():
+    """
+    Bach chorales, transposed to C major or C minor (depending on original key).
+    Only contains chorales with 4 voices populated.
+    Requires music21.
 
-        for u, idx in zip(sorted(lu.keys()), all_idx):
-            if len(idx) > 0:
-                arr.flat[idx] = lu[u]
-        return arr, lu
+    n_timesteps : 34270
+    n_features : 4
+    n_classes : 12 (duration), 54 (pitch)
 
-    pitch_list = sorted(np.unique(dp))
-    duration_list = sorted(np.unique(dd))
+    Returns
+    -------
+    summary : dict
+        A dictionary cantaining data and image statistics.
 
-    dp, pitch_lu = replace_with_indices(dp)
-    dd, duration_lu = replace_with_indices(dd)
-    ldp = [replace_with_indices(dpi.T, pitch_lu)[0] for dpi in d["data_pitch"]]
-    ldd = [replace_with_indices(ddi.T, duration_lu)[0] for ddi in d["data_duration"]]
-    d = {"data_pitch": dp.transpose()[:, ::-1],
-         "data_duration": dd.transpose()[:, ::-1],
-         "list_of_data_pitch": ldp,
-         "list_of_data_duration": ldd,
-         "list_of_data_key": d["data_key"],
-         "pitch_list": pitch_list,
-         "duration_list": duration_list,
-         "major_minor_split": major_minor_split}
-    return d
+        summary["data_pitch"] : array, shape (34270, 4)
+            All pieces' pitches concatenated as an array
+        summary["data_duration"] : array, shape (34270, 4)
+            All pieces' durations concatenated as an array
+        summary["list_of_data_pitch"] : list of array
+            Pitches for each piece
+        summary["list_of_data_duration"] : list of array
+            Durations for each piece
+        summary["list_of_data_key"] : list of str
+            String key for each piece
+        summary["pitch_list"] : list, len 54
+        summary["duration_list"] : list, len 12
+        summary["major_minor_split"] : int, 16963
+            Index into data_pitch or data_duration to split for major and minor
+
+    Can split the data to only have major or minor key songs.
+    For major, summary["data_pitch"][:summary["major_minor_split"]]
+    For minor, summary["data_pitch"][summary["major_minor_split"]:]
+    The same operation works for duration.
+
+    pitch_list and duration_list give the mapping back from array value to
+    actual data value.
+    """
+
+    data_path = check_fetch_wikifonia_music21()
+    pickle_path = os.path.join(data_path, "__processed_wikifonia.pkl")
+    return _musicxml_extract(data_path, pickle_path, mxl_ext=".mxl")

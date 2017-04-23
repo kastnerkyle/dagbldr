@@ -20,13 +20,22 @@ import copy
 # minor mode, bach
 # /u/kastner/dagbldr_lookup/1bd8b6_rnn_midi_masked_lm.json (06-42-55_2017-21-04)
 
-def duration_and_pitch_to_pretty_midi(durations, pitches, add_to_name=0,
-                                      voice_mappings=["Sitar", "Orchestral Harp", "Acoustic Guitar (nylon)", "Pan Flute"],
-                                      voice_velocity=[60, 100, 100, 50],
-                                      voice_offset=[0, 0, 0, 12],
-                                      voice_decay=[1., 1., 1., .96]):
+def duration_and_pitch_to_pretty_midi(durations, pitches, name_tag="sample_{}.mid",
+                                      add_to_name=0, voice_mappings="woodwinds"):
     import pretty_midi
     # BTAS mapping
+    if voice_mappings == "weird":
+        voice_mappings = ["Sitar", "Orchestral Harp", "Acoustic Guitar (nylon)", "Pan Flute"]
+        voice_velocity = [60, 100, 100, 50]
+        voice_offset = [0, 0, 0, 12]
+        voice_decay = [1., 1., 1., .96]
+    elif voice_mappings == "woodwinds":
+        voice_mappings = ["Bassoon", "Clarinet", "English Horn", "Oboe"]
+        voice_velocity = [100, 100, 100, 100]
+        voice_offset = [0, 0, 0, 12]
+        voice_decay = [1., 1., 1., 1.]
+    else:
+        raise ValueError("Unknown voice mapping specified")
     len_durations = len(durations)
     order = durations.shape[-1]
     n_samples = durations.shape[1]
@@ -65,7 +74,7 @@ def duration_and_pitch_to_pretty_midi(durations, pitches, add_to_name=0,
         for pm_instrument in pm_instruments:
             pm_obj.instruments.append(pm_instrument)
         # Write out the MIDI data
-        pm_obj.write('sample_{}.mid'.format(ss + add_to_name))
+        pm_obj.write(name_tag.format(ss + add_to_name))
 
 parser = argparse.ArgumentParser(description="Sample audio from saved model")
 args = parser.parse_args()
@@ -175,8 +184,11 @@ for i in range(n_reps):
     for n, dw in enumerate(duration_where):
         duration_mb[dw] = dl[n]
 
-    if not os.path.exists("masked_samples"):
-        os.mkdir("masked_samples")
-    os.chdir("masked_samples")
-    duration_and_pitch_to_pretty_midi(duration_mb, pitch_mb, add_to_name=i * mb.shape[1])
+    if not os.path.exists("midi_samples"):
+        os.mkdir("midi_samples")
+    os.chdir("midi_samples")
+    duration_and_pitch_to_pretty_midi(duration_mb, pitch_mb,
+                                      name_tag="masked_sample_{}.mid",
+                                      add_to_name=i * mb.shape[1])
+    dump_midi_player_template()
     os.chdir("..")

@@ -24,13 +24,14 @@ from dagbldr.training import TrainingLoop
 from dagbldr.datasets import list_of_array_iterator
 
 from dagbldr.datasets import fetch_symbtr_music21
-
-'''
 from dagbldr.datasets import fetch_bach_chorales_music21
-mu = fetch_bach_chorales_music21()
-'''
+from dagbldr.datasets import fetch_wikifonia_music21
 
+"""
 mu = fetch_symbtr_music21()
+mu = fetch_wikifonia_music21()
+"""
+mu = fetch_bach_chorales_music21()
 
 n_epochs = 1850
 minibatch_size = 2
@@ -166,7 +167,6 @@ fit_function = theano.function([A_sym, A_mask_sym, h0], [cost, h],
 cost_function = theano.function([A_sym, A_mask_sym, h0], [cost, h])
 predict_function = theano.function([A_sym, A_mask_sym, h0],
                                    pitch_lins + dur_lins + [h])
-raise ValueError()
 
 def train_loop(itr, info):
     pitch_mb, pitch_mask, dur_mb, dur_mask = next(itr)
@@ -192,7 +192,7 @@ TL = TrainingLoop(train_loop, train_itr,
                   valid_loop, valid_itr,
                   n_epochs=n_epochs,
                   checkpoint_every_n_seconds=30 * 60 * 60,
-                  checkpoint_every_n_epochs=5000,
+                  checkpoint_every_n_epochs=n_epochs // 10,
                   checkpoint_dict=checkpoint_dict,
                   skip_minimums=True,
                   skip_most_recents=False)
