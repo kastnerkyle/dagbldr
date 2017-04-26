@@ -32,7 +32,7 @@ mu = fetch_bach_chorales_music21()
 #mu = fetch_wikifonia_music21()
 
 #n_epochs = 500
-n_epochs = 2350
+n_epochs = 1900
 minibatch_size = 2
 order = mu["list_of_data_pitch"][0].shape[-1]
 n_in = 2 * order
@@ -55,17 +55,17 @@ ld2 = [ldi[:max_len] for n, ldi in enumerate(ld)]
 lp = lp2
 ld = ld2
 
-"""
+# key can be major minor none
 key = "major"
-lip = []
-lid = []
-for n, k in enumerate(mu["list_of_data_key"]):
-    if key in k:
-        lip.append(lp[n])
-        lid.append(ld[n])
-lp = lip
-ld = lid
-"""
+if key is not None:
+    lip = []
+    lid = []
+    for n, k in enumerate(mu["list_of_data_key"]):
+        if key in k:
+            lip.append(lp[n])
+            lid.append(ld[n])
+    lp = lip
+    ld = lid
 
 lpn = np.concatenate(lp, axis=0)
 lpn = lpn - lpn[:, 0][:, None]
@@ -132,18 +132,29 @@ valid_itr = list_of_array_iterator([lp, ld], minibatch_size, start_index=.9,
                                    randomize=True, random_state=random_state)
 
 pitch_mb, pitch_mask, dur_mb, dur_mask = next(train_itr)
-m_p = make_markov_mask(pitch_mb, pitch_mask, n_pitches, step_lookups_pitch)
-m_d = make_markov_mask(dur_mb, dur_mask, n_durations, step_lookups_duration)
-from IPython import embed; embed(); raise ValueError()
+pitch_markov_mask = make_markov_mask(pitch_mb, pitch_mask, n_pitches, step_lookups_pitch)
+dur_markov_mask = make_markov_mask(dur_mb, dur_mask, n_durations, step_lookups_duration)
 
 train_itr.reset()
 mb = np.concatenate((pitch_mb, dur_mb), axis=-1)
+markov_mask_mbs = [np.concatenate((pitch_markov_mask[i], dur_markov_mask[i]), axis=-1)
+                   for i in range(order)]
 h0_init = np.zeros((minibatch_size, 2 * n_hid)).astype("float32")
 
 A_sym = tensor.tensor3()
 A_sym.tag.test_value = mb
 A_mask_sym = tensor.fmatrix()
 A_mask_sym.tag.test_value = pitch_mask
+
+A_markov_mask_syms = []
+X_markov_mask_syms = []
+y_markov_mask_syms = []
+for i in range(order):
+    A_markov_mask_sym = tensor.tensor3()
+    A_markov_mask_sym.tag.test_value = markov_mask_mbs[i]
+    A_markov_mask_syms.append(A_markov_mask_sym)
+    X_markov_mask_syms.append(A_markov_mask_sym[:-1])
+    y_markov_mask_syms.append(A_markov_mask_sym[1:])
 
 h0 = tensor.fmatrix()
 h0.tag.test_value = h0_init
@@ -157,7 +168,6 @@ duration_e = multiembed([A_sym[:, :, order:]], order, n_durations, n_dur_emb,
 
 X_pitch_e_sym = pitch_e[:-1]
 X_dur_e_sym = duration_e[:-1]
-
 X_mask_sym = A_mask_sym[:-1]
 
 X_fork = lstm_fork([X_pitch_e_sym, X_dur_e_sym],
@@ -196,6 +206,9 @@ for i in range(order):
                        n_durations,
                        name="pred_dur_%i" % i,
                        random_state=random_state)
+    y_dur_markov_mask = y_markov_mask_syms[i][:, :, -n_durations:]
+    y_dur_lin = y_dur_markov_mask * y_dur_lin
+
     dur_lins.append(y_dur_lin)
 
     y_dur_pred = softmax_activation(y_dur_lin)
@@ -209,6 +222,9 @@ for i in range(order):
                          n_pitches,
                          name="pred_pitch_%i" % i,
                          random_state=random_state)
+
+    y_pitch_markov_mask = y_markov_mask_syms[i][:, :, :n_pitches]
+    y_pitch_lin = y_pitch_markov_mask * y_pitch_lin
     pitch_lins.append(y_pitch_lin)
 
     y_pitch_pred = softmax_activation(y_pitch_lin)
@@ -232,27 +248,36 @@ grads = gradient_clipping(grads, clip)
 opt = adam(params, learning_rate)
 updates = opt.updates(params, grads)
 
-fit_function = theano.function([A_sym, A_mask_sym, h0], [cost, h],
+fit_function = theano.function([A_sym, A_mask_sym, h0] + A_markov_mask_syms, [cost, h],
                                updates=updates)
-cost_function = theano.function([A_sym, A_mask_sym, h0], [cost, h])
-predict_function = theano.function([A_sym, A_mask_sym, h0],
+cost_function = theano.function([A_sym, A_mask_sym, h0] + A_markov_mask_syms, [cost, h])
+predict_function = theano.function([A_sym, A_mask_sym, h0] + A_markov_mask_syms,
                                    pitch_lins + dur_lins + [h])
+
 
 def train_loop(itr, info):
     pitch_mb, pitch_mask, dur_mb, dur_mask = next(itr)
+    pitch_markov_mask = make_markov_mask(pitch_mb, pitch_mask, n_pitches, step_lookups_pitch)
+    dur_markov_mask = make_markov_mask(dur_mb, dur_mask, n_durations, step_lookups_duration)
+    markov_mask_mbs = [np.concatenate((pitch_markov_mask[i], dur_markov_mask[i]), axis=-1)
+                    for i in range(order)]
     mb = np.concatenate((pitch_mb, dur_mb), axis=-1)
     mask = pitch_mask
     h0_init = np.zeros((minibatch_size, 2 * n_hid)).astype("float32")
-    cost, _ = fit_function(mb, mask, h0_init)
+    cost, _ = fit_function(mb, mask, h0_init, *markov_mask_mbs)
     return [cost]
 
 
 def valid_loop(itr, info):
     pitch_mb, pitch_mask, dur_mb, dur_mask = next(itr)
+    pitch_markov_mask = make_markov_mask(pitch_mb, pitch_mask, n_pitches, step_lookups_pitch)
+    dur_markov_mask = make_markov_mask(dur_mb, dur_mask, n_durations, step_lookups_duration)
+    markov_mask_mbs = [np.concatenate((pitch_markov_mask[i], dur_markov_mask[i]), axis=-1)
+                    for i in range(order)]
     mb = np.concatenate((pitch_mb, dur_mb), axis=-1)
     mask = pitch_mask
     h0_init = np.zeros((minibatch_size, 2 * n_hid)).astype("float32")
-    cost, _ = cost_function(mb, mask, h0_init)
+    cost, _ = cost_function(mb, mask, h0_init, *markov_mask_mbs)
     return [cost]
 
 
