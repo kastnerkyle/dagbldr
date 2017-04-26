@@ -51,7 +51,6 @@ lp = mu["list_of_data_pitch"]
 ld = mu["list_of_data_duration"]
 
 checkpoint_dict = fetch_checkpoint_dict(["rnn_midi_masked_lm"])
-raise ValueError()
 predict_function = checkpoint_dict["predict_function"]
 
 train_itr = list_of_array_iterator([lp, ld], minibatch_size, stop_index=.9,
@@ -59,8 +58,13 @@ train_itr = list_of_array_iterator([lp, ld], minibatch_size, stop_index=.9,
 valid_itr = list_of_array_iterator([lp, ld], minibatch_size, start_index=.9,
                                    randomize=True, random_state=random_state)
 
+if not os.path.exists("samples"):
+    os.mkdir("samples")
+
+dump_midi_player_template("samples")
+
 for i in range(n_reps):
-    pitch_mb, pitch_mask, dur_mb, dur_mask = next(train_itr)
+    pitch_mb, pitch_mask, dur_mb, dur_mask = next(valid_itr)
     mb = np.concatenate((pitch_mb, dur_mb), axis=-1)
     h0_init = np.zeros((minibatch_size, 2 * n_hid)).astype("float32")
     h0_i = h0_init
@@ -131,10 +135,10 @@ for i in range(n_reps):
     for n, dw in enumerate(duration_where):
         duration_mb[dw] = dl[n]
 
-    if not os.path.exists("samples"):
-        os.mkdir("samples")
-    os.chdir("samples")
-    pitches_and_durations_to_pretty_midi(duration_mb, pitch_mb,
+    #pitch_mb = pitch_mb[prime_step:]
+    #duration_mb = duration_mb[prime_step:]
+    pitches_and_durations_to_pretty_midi(pitch_mb, duration_mb,
+                                         save_dir="samples/samples",
                                          name_tag="masked_sample_{}.mid",
+                                         voice_params="woodwinds",
                                          add_to_name=i * mb.shape[1])
-    dump_midi_player_template()

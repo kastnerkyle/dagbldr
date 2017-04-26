@@ -1313,7 +1313,17 @@ def _musicxml_extract(data_path, pickle_path, mxl_ext=".xml"):
             key_shift = k.getTonic().pitchClass
             #try:
             pitches, durations = music_21_to_pitch_duration(p)
-            pitches = pitches - key_shift
+            # to C (minor or major)
+            if key_shift > 6:
+                key_shift = 12 - key_shift
+                pitches = pitches + key_shift
+            else:
+                pitches = pitches - key_shift
+            # to A minor
+            if "minor" in k.name:
+                # downshift
+                # c -> b -> bf -> a
+                pitches = pitches - 3
             #if pitches.shape[0] != 4:
                 #from IPython import embed; embed(); raise ValueError()
                 #raise AttributeError("Too many voices, skipping...")
@@ -1625,23 +1635,41 @@ def pitches_and_durations_to_pretty_midi(pitches, durations,
                                          save_dir="samples",
                                          name_tag="sample_{}.mid",
                                          add_to_name=0,
-                                         voice_mappings="woodwinds"):
+                                         lower_pitch_limit=12,
+                                         voice_params="woodwinds"):
     import pretty_midi
     # BTAS mapping
-    if voice_mappings == "weird":
-        voice_mappings = ["Sitar", "Orchestral Harp", "Acoustic Guitar (nylon)", "Pan Flute"]
-        voice_velocity = [60, 100, 100, 50]
-        voice_offset = [0, 0, 0, 12]
-        voice_decay = [1., 1., 1., .96]
-    elif voice_mappings == "woodwinds":
+    def weird():
+        voice_mappings = ["Sitar", "Orchestral Harp", "Acoustic Guitar (nylon)",
+                          "Pan Flute"]
+        voice_velocity = [20, 80, 80, 40]
+        voice_offset = [0, 0, 0, 0]
+        voice_decay = [1., 1., 1., .95]
+        return voice_mappings, voice_velocity, voice_offset, voice_decay
+
+    if voice_params == "weird":
+        voice_mappings, voice_velocity, voice_offset, voice_decay = weird()
+    elif voice_params == "weird_r":
+        voice_mappings, voice_velocity, voice_offset, voice_decay = weird()
+        voice_mappings = voice_mappings[::-1]
+        voice_velocity = voice_velocity[::-1]
+        voice_offset = voice_offset[::-1]
+        voice_decay = voice_decay[::-1]
+    elif voice_params == "woodwinds":
         voice_mappings = ["Bassoon", "Clarinet", "English Horn", "Oboe"]
         voice_velocity = [80, 80, 80, 80]
-        voice_offset = [0, 0, 0, 0]
+        voice_offset = [-2, -2, -2, -2]
         voice_decay = [1., 1., 1., 1.]
     else:
+        # eventually add and define dictionary support here
         raise ValueError("Unknown voice mapping specified")
     len_durations = len(durations)
     order = durations.shape[-1]
+    voice_mappings = voice_mappings[-order:]
+    voice_velocity = voice_velocity[-order:]
+    voice_offset = voice_offset[-order:]
+    voice_decay = voice_decay[-order:]
+
     n_samples = durations.shape[1]
     assert len(durations) == len(pitches)
     for ss in range(n_samples):
@@ -1662,13 +1690,16 @@ def pitches_and_durations_to_pretty_midi(pitches, durations,
                 durations_isj = durations[ii, ss, jj]
                 p = int(pitches_isj)
                 d = durations_isj
-                if d == -1:
+                if d < 0:
                     continue
-                if p == -1:
+                if p < 0:
                     continue
+                # hack out the whole last octave?
                 s = time_offset[jj]
                 e = time_offset[jj] + voice_decay[jj] * d
                 time_offset[jj] += d
+                if p < lower_pitch_limit:
+                    continue
                 note = pretty_midi.Note(velocity=voice_velocity[jj],
                                         pitch=p + voice_offset[jj],
                                         start=s, end=e)
@@ -1679,7 +1710,10 @@ def pitches_and_durations_to_pretty_midi(pitches, durations,
             pm_obj.instruments.append(pm_instrument)
         # Write out the MIDI data
         sv = save_dir + os.sep + name_tag.format(ss + add_to_name)
-        pm_obj.write(sv)
+        try:
+            pm_obj.write(sv)
+        except ValueError:
+            logger.info("Unable to write file {} due to mido error".format(sv))
 
 
 def check_fetch_midi_template():

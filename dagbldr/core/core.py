@@ -553,7 +553,7 @@ def fetch_checkpoint_dict(list_of_match_strings,
                             print("%i : %s (%s)" % (n, m, r['import_time']))
                     elif "extra_info" not in r.keys():
                         print("%i : %s (%s)" % (n, m, r['import_time']))
-                line = raw_input('Prompt ("e0" through "eX" to edit info, "Ctrl-C" to quit): ')
+                line = raw_input('Prompt ("0" through "X" select, "e0" through "eX" to edit info, "d0" through "dX" to delete, "Ctrl-C" to quit): ')
                 try:
                     idx = int(line)
                     if idx in list(range(len(matches))):
@@ -562,6 +562,7 @@ def fetch_checkpoint_dict(list_of_match_strings,
                 except:
                     cmd = line.strip()
                     if cmd[0] == "e":
+                        # edit logic
                         idx = int(cmd[1:])
                         if idx in list(range(len(matches))):
                             with open(matches[idx]) as f:
@@ -581,8 +582,23 @@ def fetch_checkpoint_dict(list_of_match_strings,
                             r["extra_info"] = nl.strip()
                             with open(matches[idx], 'w') as f:
                                 json.dump(r, f)
-                    print('Editing complete')
-                    continue
+                        print('Editing complete')
+                        continue
+                    elif cmd[0] == "d":
+                        # edit logic
+                        idx = int(cmd[1:])
+                        if idx in list(range(len(matches))):
+                            resp = raw_input('Are you sure you want to delete {}: {}?\n(Type y and press enter to confirm)\n'.format(idx, matches[idx]))
+                            resp = resp.strip()
+                            if resp != "y":
+                                continue
+                            else:
+                                os.remove(matches[idx])
+                                matches = [mi for n, mi in enumerate(matches)
+                                           if n != idx]
+                        print('Deletion complete')
+                        continue
+
                 print('Selection invalid : "%s"' % line)
                 print('Try again!')
             best_match = matches[idx]
