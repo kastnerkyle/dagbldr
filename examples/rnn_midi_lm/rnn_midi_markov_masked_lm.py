@@ -44,92 +44,50 @@ random_state = np.random.RandomState(1999)
 n_pitch_emb = 20
 n_dur_emb = 4
 n_hid = 64
-max_len = 150
 
-lp = mu["list_of_data_pitch"]
-ld = mu["list_of_data_duration"]
+from shared import preproc_and_make_lookups
+from shared import make_markov_mask
 
-lp2 = [lpi[:max_len] for n, lpi in enumerate(lp)]
-ld2 = [ldi[:max_len] for n, ldi in enumerate(ld)]
-
-lp = lp2
-ld = ld2
-
-# key can be major minor none
-key = "major"
-if key is not None:
-    lip = []
-    lid = []
-    for n, k in enumerate(mu["list_of_data_key"]):
-        if key in k:
-            lip.append(lp[n])
-            lid.append(ld[n])
-    lp = lip
-    ld = lid
-
-lpn = np.concatenate(lp, axis=0)
-lpn = lpn - lpn[:, 0][:, None]
-
-ldn = np.concatenate(ld, axis=0)
-ldn = ldn - ldn[:, 0][:, None]
-
-lpnu = np.vstack({tuple(row) for row in lpn})
-ldnu = np.vstack({tuple(row) for row in ldn})
-
-step_lookups_pitch = []
-step_lookups_duration = []
-from collections import defaultdict
-for i in range(ldn.shape[-1]):
-    if i == 0:
-        lup = defaultdict(lambda: np.arange(2 * n_pitches, dtype="float32") - n_pitches)
-        lud = defaultdict(lambda: np.arange(2 * n_durations, dtype="float32") - n_durations)
-    elif i < ldn.shape[-1]:
-        lup = {}
-        keyset = {tuple(row) for row in lpnu[:, :i]}
-        for k in keyset:
-            ii = np.where(lpnu[:, :i] == k)[0]
-            v = lpnu[ii, i]
-            vset = np.array(sorted(list(set(v))))
-            lup[k] = vset
-        lud = {}
-        keyset = {tuple(row) for row in ldnu[:, :i]}
-        for k in keyset:
-            ii = np.where(ldnu[:, :i] == k)[0]
-            v = ldnu[ii, i]
-            vset = np.array(sorted(list(set(v))))
-            lud[k] = vset
-    step_lookups_pitch.append(lup)
-    step_lookups_duration.append(lud)
-
+r = preproc_and_make_lookups(mu, max_len=150, key=None)
+lp, ld, step_lookups_pitch, step_lookups_duration = r
 
 train_itr = list_of_array_iterator([lp, ld], minibatch_size, stop_index=.9,
                                    randomize=True, random_state=random_state)
 
-def make_markov_mask(mb, mb_mask, limit, step_lookups):
-    pre_mb = mb.copy()
-    mb = mb - mb[:, :, 0][:, :, None]
-    markov_masks = []
-    for ii in range(mb.shape[2]):
-        markov_masks.append(np.zeros((mb.shape[0], mb.shape[1], limit), dtype="float32"))
-    for j in range(mb.shape[1]):
-        for i in range(mb.shape[0]):
-            if mb_mask[i, j] > 0:
-                for k in range(mb.shape[2]):
-                    tt = step_lookups[k][tuple(mb[i, j, :k])]
-                    subidx = tt[(pre_mb[i, j, k] + tt) >= 0] + pre_mb[i, j, k]
-                    subidx = subidx[subidx < limit]
-                    subidx = subidx.astype("int32")
-                    tmp = markov_masks[k][i, j].copy()
-                    for si in subidx:
-                        tmp[si] = 1.
-                    markov_masks[k][i, j, :] = tmp
-            else:
-                for k in range(mb.shape[2]):
-                    markov_masks[k][i, j, :] *= 0.
-    return markov_masks
-
 valid_itr = list_of_array_iterator([lp, ld], minibatch_size, start_index=.9,
                                    randomize=True, random_state=random_state)
+
+"""
+for i in range(10):
+    pitch_mb, pitch_mask, dur_mb, dur_mask = next(valid_itr)
+    from dagbldr.datasets import pitches_and_durations_to_pretty_midi
+    from dagbldr.datasets import dump_midi_player_template
+    pitch_where = []
+    dur_where = []
+    pl = mu['pitch_list']
+    dl = mu['duration_list']
+    for n, pli in enumerate(pl):
+        pitch_where.append(np.where(pitch_mb == n))
+
+    for n, dli in enumerate(dl):
+        dur_where.append(np.where(dur_mb == n))
+
+    for n, pw in enumerate(pitch_where):
+        pitch_mb[pw] = pl[n]
+
+    for n, dw in enumerate(dur_where):
+        dur_mb[dw] = dl[n]
+
+    prime_step = 25
+    pitch_mb = pitch_mb[prime_step:]
+    dur_mb = dur_mb[prime_step:]
+    # print(mu["filename_list"][:2 * minibatch_size])
+    pitches_and_durations_to_pretty_midi(pitch_mb, dur_mb,
+                                         save_dir="samples/samples",
+                                         add_to_name=i * minibatch_size)
+dump_midi_player_template("samples")
+raise ValueError()
+"""
 
 pitch_mb, pitch_mask, dur_mb, dur_mask = next(train_itr)
 pitch_markov_mask = make_markov_mask(pitch_mb, pitch_mask, n_pitches, step_lookups_pitch)
@@ -206,15 +164,15 @@ for i in range(order):
                        n_durations,
                        name="pred_dur_%i" % i,
                        random_state=random_state)
-    y_dur_markov_mask = y_markov_mask_syms[i][:, :, -n_durations:]
-    y_dur_lin = y_dur_markov_mask * y_dur_lin
-
     dur_lins.append(y_dur_lin)
 
     y_dur_pred = softmax_activation(y_dur_lin)
+    y_dur_markov_mask = y_markov_mask_syms[i][:, :, -n_durations:]
+    y_dur_pred = y_dur_markov_mask * y_dur_pred
+    #y_dur_pred = softmax_activation(y_dur_pred)
     dur_weight = float(n_pitches) / (n_pitches + n_durations)
 
-    dur_cost = dur_weight * categorical_crossentropy(y_dur_pred, y_dur_sym[..., i])
+    dur_cost = dur_weight * categorical_crossentropy(y_dur_pred, y_dur_sym[..., i], eps=1E-8)
     dur_cost = masked_cost(dur_cost, X_mask_sym).sum() / (X_mask_sym.sum() + 1.)
 
     y_pitch_lin = linear([h_o, ar_y_pitch[i], ar_y_dur[i]],
@@ -222,16 +180,16 @@ for i in range(order):
                          n_pitches,
                          name="pred_pitch_%i" % i,
                          random_state=random_state)
-
-    y_pitch_markov_mask = y_markov_mask_syms[i][:, :, :n_pitches]
-    y_pitch_lin = y_pitch_markov_mask * y_pitch_lin
     pitch_lins.append(y_pitch_lin)
 
     y_pitch_pred = softmax_activation(y_pitch_lin)
+    y_pitch_markov_mask = y_markov_mask_syms[i][:, :, :n_pitches]
+    y_pitch_pred = y_pitch_markov_mask * y_pitch_pred
+    #y_pitch_pred = softmax_activation(y_pitch_pred)
     pitch_weight = float(n_durations) / (n_pitches + n_durations)
 
     pitch_cost = pitch_weight * categorical_crossentropy(y_pitch_pred,
-                                                         y_pitch_sym[..., i])
+                                                         y_pitch_sym[..., i], eps=1E-8)
     pitch_cost = masked_cost(pitch_cost, X_mask_sym).sum() / (X_mask_sym.sum() + 1.)
 
     costs.append(dur_cost)
@@ -251,7 +209,7 @@ updates = opt.updates(params, grads)
 fit_function = theano.function([A_sym, A_mask_sym, h0] + A_markov_mask_syms, [cost, h],
                                updates=updates)
 cost_function = theano.function([A_sym, A_mask_sym, h0] + A_markov_mask_syms, [cost, h])
-predict_function = theano.function([A_sym, A_mask_sym, h0] + A_markov_mask_syms,
+predict_function = theano.function([A_sym, A_mask_sym, h0],
                                    pitch_lins + dur_lins + [h])
 
 
