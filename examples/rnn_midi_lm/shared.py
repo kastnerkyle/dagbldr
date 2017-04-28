@@ -40,28 +40,7 @@ def make_markov_mask(mb, mb_mask, limit, step_lookups, go_through=None,
                     markov_masks[k][i, j, :] *= 0.
     return markov_masks
 
-
-def preproc_and_make_lookups(mu, max_len=150, key=None):
-    lp = mu["list_of_data_pitch"]
-    ld = mu["list_of_data_duration"]
-
-    lp2 = [lpi[:max_len] for n, lpi in enumerate(lp)]
-    ld2 = [ldi[:max_len] for n, ldi in enumerate(ld)]
-
-    lp = lp2
-    ld = ld2
-
-    # key can be major minor none
-    if key is not None:
-        lip = []
-        lid = []
-        for n, k in enumerate(mu["list_of_data_key"]):
-            if key in k:
-                lip.append(lp[n])
-                lid.append(ld[n])
-        lp = lip
-        ld = lid
-
+def _make_vertical_masks(lp, ld, mu):
     lpn = np.concatenate(lp, axis=0)
     lpn = lpn - lpn[:, 0][:, None]
 
@@ -98,4 +77,30 @@ def preproc_and_make_lookups(mu, max_len=150, key=None):
                 lud[k] = vset
         step_lookups_pitch.append(lup)
         step_lookups_duration.append(lud)
+    return step_lookups_pitch, step_lookups_duration
+
+
+def preproc_and_make_lookups(mu, max_len=150, key=None):
+    lp = mu["list_of_data_pitch"]
+    ld = mu["list_of_data_duration"]
+
+    lp2 = [lpi[:max_len] for n, lpi in enumerate(lp)]
+    ld2 = [ldi[:max_len] for n, ldi in enumerate(ld)]
+
+    lp = lp2
+    ld = ld2
+
+    # key can be major minor none
+    if key is not None:
+        lip = []
+        lid = []
+        for n, k in enumerate(mu["list_of_data_key"]):
+            if key in k:
+                lip.append(lp[n])
+                lid.append(ld[n])
+        lp = lip
+        ld = lid
+
+    step_lookups_pitch, step_lookups_duration = _make_vertical_masks(lp, ld, mu)
+
     return lp, ld, step_lookups_pitch, step_lookups_duration

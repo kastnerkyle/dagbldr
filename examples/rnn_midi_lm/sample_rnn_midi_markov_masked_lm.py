@@ -35,11 +35,11 @@ n_dur_emb = 4
 n_hid = 64
 minibatch_size = 2
 n_reps = 10
-sm = lambda x: np_softmax_activation(x, temperature)
 max_step = 70
 max_note = order
 prime_step = 25
 temperature = .1
+sm = lambda x: np_softmax_activation(x, temperature)
 deterministic = True
 
 n_pitches = len(mu["pitch_list"])
@@ -67,7 +67,7 @@ if not os.path.exists("samples"):
 dump_midi_player_template("samples")
 
 for i in range(n_reps):
-    pitch_mb, pitch_mask, dur_mb, dur_mask = next(valid_itr)
+    pitch_mb, pitch_mask, dur_mb, dur_mask = next(train_itr)
     mb = np.concatenate((pitch_mb, dur_mb), axis=-1)
     h0_init = np.zeros((minibatch_size, 2 * n_hid)).astype("float32")
     h0_i = h0_init
@@ -92,12 +92,15 @@ for i in range(n_reps):
             pitch_preds = [sm(pl) for pl in pitch_lins]
             dur_preds = [sm(dl) for dl in dur_lins]
 
-            pitch_markov_mask = make_markov_mask(pitch_mb_m, pitch_mask_m, n_pitches,
+            pitch_markov_mask = make_markov_mask(pitch_mb_m, pitch_mask_m,
+                                                 n_pitches,
                                                  step_lookups_pitch,
                                                  go_through=n_n,
                                                  warn=True)
-            dur_markov_mask = make_markov_mask(dur_mb_m, dur_mask_m, n_durations,
-                                               step_lookups_duration, go_through=n_n,
+            dur_markov_mask = make_markov_mask(dur_mb_m, dur_mask_m,
+                                               n_durations,
+                                               step_lookups_duration,
+                                               go_through=n_n,
                                                warn=True)
             # convenience, this could just as easily be only 1 mask
             pitch_preds = [pitch_preds[iii] * pitch_markov_mask[iii] for iii in range(n_n + 1)]

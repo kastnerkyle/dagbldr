@@ -48,7 +48,7 @@ n_hid = 64
 from shared import preproc_and_make_lookups
 from shared import make_markov_mask
 
-r = preproc_and_make_lookups(mu, max_len=150, key=None)
+r = preproc_and_make_lookups(mu, max_len=150, key="major")
 lp, ld, step_lookups_pitch, step_lookups_duration = r
 
 train_itr = list_of_array_iterator([lp, ld], minibatch_size, stop_index=.9,
@@ -56,6 +56,10 @@ train_itr = list_of_array_iterator([lp, ld], minibatch_size, stop_index=.9,
 
 valid_itr = list_of_array_iterator([lp, ld], minibatch_size, start_index=.9,
                                    randomize=True, random_state=random_state)
+
+pitch_mb, pitch_mask, dur_mb, dur_mask = next(train_itr)
+pitch_markov_mask = make_markov_mask(pitch_mb, pitch_mask, n_pitches, step_lookups_pitch)
+dur_markov_mask = make_markov_mask(dur_mb, dur_mask, n_durations, step_lookups_duration)
 
 """
 for i in range(10):
@@ -88,10 +92,6 @@ for i in range(10):
 dump_midi_player_template("samples")
 raise ValueError()
 """
-
-pitch_mb, pitch_mask, dur_mb, dur_mask = next(train_itr)
-pitch_markov_mask = make_markov_mask(pitch_mb, pitch_mask, n_pitches, step_lookups_pitch)
-dur_markov_mask = make_markov_mask(dur_mb, dur_mask, n_durations, step_lookups_duration)
 
 train_itr.reset()
 mb = np.concatenate((pitch_mb, dur_mb), axis=-1)
