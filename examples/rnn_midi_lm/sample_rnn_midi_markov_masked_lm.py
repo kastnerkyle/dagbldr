@@ -35,23 +35,101 @@ n_dur_emb = 4
 n_hid = 64
 minibatch_size = 2
 n_reps = 10
-max_step = 70
-max_note = order
-prime_step = 25
-temperature = .1
 sm = lambda x: np_softmax_activation(x, temperature)
-deterministic = True
+max_step = 70
+max_len = 150
+max_note = order
+prime_step = 10
+temperature = .1
+deterministic = False
 
 n_pitches = len(mu["pitch_list"])
 n_durations = len(mu["duration_list"])
 
 random_state = np.random.RandomState(1999)
 
-from shared import preproc_and_make_lookups
-from shared import make_markov_mask
+lp = mu["list_of_data_pitch"]
+ld = mu["list_of_data_duration"]
 
-r = preproc_and_make_lookups(mu, max_len=150, key=None)
-lp, ld, step_lookups_pitch, step_lookups_duration = r
+lp2 = [lpi[:max_len] for n, lpi in enumerate(lp)]
+ld2 = [ldi[:max_len] for n, ldi in enumerate(ld)]
+
+lp = lp2
+ld = ld2
+
+# key can be major minor none
+key = None
+if key is not None:
+    lip = []
+    lid = []
+    for n, k in enumerate(mu["list_of_data_key"]):
+        if key in k:
+            lip.append(lp[n])
+            lid.append(ld[n])
+    lp = lip
+    ld = lid
+
+lpn = np.concatenate(lp, axis=0)
+lpn = lpn - lpn[:, 0][:, None]
+
+ldn = np.concatenate(ld, axis=0)
+ldn = ldn - ldn[:, 0][:, None]
+
+lpnu = np.vstack({tuple(row) for row in lpn})
+ldnu = np.vstack({tuple(row) for row in ldn})
+
+step_lookups_pitch = []
+step_lookups_duration = []
+from collections import defaultdict
+for i in range(ldn.shape[-1]):
+    if i == 0:
+        lup = defaultdict(lambda: np.arange(2 * n_pitches, dtype="float32") - n_pitches)
+        lud = defaultdict(lambda: np.arange(2 * n_durations, dtype="float32") - n_durations)
+    elif i < ldn.shape[-1]:
+        lup = {}
+        keyset = {tuple(row) for row in lpnu[:, :i]}
+        for k in keyset:
+            ii = np.where(lpnu[:, :i] == k)[0]
+            v = lpnu[ii, i]
+            vset = np.array(sorted(list(set(v))))
+            lup[k] = vset
+        lud = {}
+        keyset = {tuple(row) for row in ldnu[:, :i]}
+        for k in keyset:
+            ii = np.where(ldnu[:, :i] == k)[0]
+            v = ldnu[ii, i]
+            vset = np.array(sorted(list(set(v))))
+            lud[k] = vset
+    step_lookups_pitch.append(lup)
+    step_lookups_duration.append(lud)
+
+
+def make_markov_mask(mb, mb_mask, limit, step_lookups):
+    pre_mb = mb.copy()
+    mb = mb - mb[:, :, 0][:, :, None]
+    markov_masks = []
+    for ii in range(mb.shape[2]):
+        markov_masks.append(np.zeros((mb.shape[0], mb.shape[1], limit), dtype="float32"))
+    for j in range(mb.shape[1]):
+        for i in range(mb.shape[0]):
+            if mb_mask[i, j] > 0:
+                for k in range(mb.shape[2]):
+                    try:
+                        tt = step_lookups[k][tuple(mb[i, j, :k])]
+                    except:
+                        # todo, fix this????
+                        tt = step_lookups[0][tuple(mb[i, j, :k])]
+                    subidx = tt[(pre_mb[i, j, k] + tt) >= 0] + pre_mb[i, j, k]
+                    subidx = subidx[subidx < limit]
+                    subidx = subidx.astype("int32")
+                    tmp = markov_masks[k][i, j].copy()
+                    for si in subidx:
+                        tmp[si] = 1.
+                    markov_masks[k][i, j, :] = tmp
+            else:
+                for k in range(mb.shape[2]):
+                    markov_masks[k][i, j, :] *= 0.
+    return markov_masks
 
 checkpoint_dict = fetch_checkpoint_dict(["rnn_midi_markov_masked_lm"])
 predict_function = checkpoint_dict["predict_function"]
@@ -67,7 +145,7 @@ if not os.path.exists("samples"):
 dump_midi_player_template("samples")
 
 for i in range(n_reps):
-    pitch_mb, pitch_mask, dur_mb, dur_mask = next(train_itr)
+    pitch_mb, pitch_mask, dur_mb, dur_mask = next(valid_itr)
     mb = np.concatenate((pitch_mb, dur_mb), axis=-1)
     h0_init = np.zeros((minibatch_size, 2 * n_hid)).astype("float32")
     h0_i = h0_init
@@ -79,76 +157,51 @@ for i in range(n_reps):
 
     for n_t in range(1, max_step - 1):
         print("Sampling timestep %i" % n_t)
-        # for temp storage
-        pitch_mb_m = np.zeros((1, mb.shape[1], max_note)).astype("float32")
-        pitch_mask_m = np.ones((1, mb.shape[1])).astype("float32")
-        dur_mb_m = np.zeros((1, mb.shape[1], max_note)).astype("float32")
-        dur_mask_m = np.ones((1, mb.shape[1])).astype("float32")
-
         for n_n in range(max_note):
+            # needs to be 3D
+            dur_mb = mb[n_t, :, -order:][None]
+            pitch_mb = mb[n_t, :, :order][None]
+
+            cur_pitch_markov_mask = make_markov_mask(pitch_mb, pitch_mask, n_pitches, step_lookups_pitch)
+            cur_dur_markov_mask = make_markov_mask(dur_mb, dur_mask, n_durations, step_lookups_duration)
+
             r = predict_function(mb[n_t - 1:n_t + 1], mask[n_t - 1:n_t + 1], h0_i)
             pitch_lins = r[:4]
             dur_lins = r[4:8]
             pitch_preds = [sm(pl) for pl in pitch_lins]
             dur_preds = [sm(dl) for dl in dur_lins]
 
-            pitch_markov_mask = make_markov_mask(pitch_mb_m, pitch_mask_m,
-                                                 n_pitches,
-                                                 step_lookups_pitch,
-                                                 go_through=n_n,
-                                                 warn=True)
-            dur_markov_mask = make_markov_mask(dur_mb_m, dur_mask_m,
-                                               n_durations,
-                                               step_lookups_duration,
-                                               go_through=n_n,
-                                               warn=True)
-            # convenience, this could just as easily be only 1 mask
-            pitch_preds = [pitch_preds[iii] * pitch_markov_mask[iii] for iii in range(n_n + 1)]
-            dur_preds = [dur_preds[iii] * dur_markov_mask[iii] for iii in range(n_n + 1)]
+            pitch_preds = [pp * ppm for pp, ppm in zip(pitch_preds, cur_pitch_markov_mask)]
+            dur_preds = [dp * dpm for dp, dpm in zip(dur_preds, cur_dur_markov_mask)]
 
-            def sample_it():
-                # deterministic
-                if deterministic:
-                    pitch_pred = pitch_preds[n_n].argmax(axis=-1)[0]
-                    dur_pred = dur_preds[n_n].argmax(axis=-1)[0]
-                else:
-                    shp = pitch_preds[n_n].shape
-                    pitch_pred = pitch_preds[n_n].reshape((-1, shp[-1]))
+            # deterministic
+            if deterministic:
+                pitch_pred = pitch_preds[n_n].argmax(axis=-1)[0]
+                dur_pred = dur_preds[n_n].argmax(axis=-1)[0]
+            else:
+                shp = pitch_preds[n_n].shape
+                pitch_pred = pitch_preds[n_n].reshape((-1, shp[-1]))
+                shp = dur_preds[n_n].shape
+                dur_pred = dur_preds[n_n].reshape((-1, shp[-1]))
 
-                    shp = dur_preds[n_n].shape
-                    dur_pred = dur_preds[n_n].reshape((-1, shp[-1]))
+                def rn(pp, eps=1E-6):
+                    return pp / (pp.sum() + eps)
+                s_p = [random_state.multinomial(1, rn(pitch_pred[m_m])).argmax()
+                       for m_m in range(pitch_pred.shape[0])]
+                s_d = [random_state.multinomial(1, rn(dur_pred[m_m])).argmax()
+                       for m_m in range(dur_pred.shape[0])]
 
-                    def rn(pp, eps=1E-6):
-                        pp[pp > eps] -= eps
-                        return pp
-                        #return pp =  pp / (pp.sum() + eps)
-                    s_p = [random_state.multinomial(1, rn(pitch_pred[m_m])).argmax()
-                           for m_m in range(pitch_pred.shape[0])]
-                    s_d = [random_state.multinomial(1, rn(dur_pred[m_m])).argmax()
-                        for m_m in range(dur_pred.shape[0])]
+                s_p = np.array(s_p).reshape((shp[0], shp[1]))
+                s_d = np.array(s_d).reshape((shp[0], shp[1]))
 
-                    s_p = np.array(s_p).reshape((shp[0], shp[1]))
-                    s_d = np.array(s_d).reshape((shp[0], shp[1]))
-
-                    pitch_pred = s_p
-                    dur_pred = s_d
-                return pitch_pred, dur_pred
-
-            pitch_pred, dur_pred = sample_it()
-
+                pitch_pred = s_p
+                dur_pred = s_d
             if n_t > prime_step:
                 mb[n_t, :, n_n] = pitch_pred
                 mb[n_t, :, n_n + max_note] = dur_pred
-
-                pitch_mb_m[0, :, n_n] = pitch_pred
-                dur_mb_m[0, :, n_n] = dur_pred
             else:
                 mb[n_t, :, n_n] = mb_o[n_t, :, n_n]
                 mb[n_t, :, n_n + max_note] = mb_o[n_t, :, n_n + max_note]
-
-                pitch_mb_m[0, :, n_n] = mb_o[n_t, :, n_n]
-                dur_mb_m[0, :, n_n] = mb_o[n_t, :, n_n]
-
         r = predict_function(mb[n_t - 1:n_t + 1], mask[n_t - 1:n_t + 1], h0_i)
         pitch_lins = r[:4]
         dur_lins = r[4:8]
@@ -180,4 +233,3 @@ for i in range(n_reps):
                                          name_tag="masked_sample_{}.mid",
                                          voice_params="woodwinds",
                                          add_to_name=i * mb.shape[1])
-    print("Rep {} complete".format(i))
