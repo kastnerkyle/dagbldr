@@ -135,8 +135,8 @@ for i in range(n_reps):
     for n, dw in enumerate(duration_where):
         duration_mb[dw] = dl[n]
 
-    #pitch_mb = pitch_mb[prime_step:]
-    #duration_mb = duration_mb[prime_step:]
+    pitch_mb = pitch_mb[prime_step:]
+    duration_mb = duration_mb[prime_step:]
     pitches_and_durations_to_pretty_midi(pitch_mb, duration_mb,
                                          save_dir="samples/samples",
                                          name_tag="masked_sample_{}.mid",

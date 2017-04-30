@@ -34,14 +34,18 @@ n_pitch_emb = 20
 n_dur_emb = 4
 n_hid = 64
 minibatch_size = 2
-n_reps = 10
-sm = lambda x: np_softmax_activation(x, temperature)
+n_reps = 5
 max_step = 70
 max_len = 150
 max_note = order
-prime_step = 10
-temperature = .1
-deterministic = False
+prime_step = 25
+temperature = .01
+sm = lambda x: np_softmax_activation(x, temperature)
+if temperature == 0.:
+    deterministic = True
+    temperature = 1.
+else:
+    deterministic = False
 
 n_pitches = len(mu["pitch_list"])
 n_durations = len(mu["duration_list"])
@@ -139,13 +143,40 @@ train_itr = list_of_array_iterator([lp, ld], minibatch_size, stop_index=.9,
 valid_itr = list_of_array_iterator([lp, ld], minibatch_size, start_index=.9,
                                    randomize=True, random_state=random_state)
 
+use_itr = valid_itr
+for i in range(n_reps):
+    pitch_mb, pitch_mask, dur_mb, dur_mask = next(use_itr)
+    pitch_where = []
+    dur_where = []
+    pl = mu['pitch_list']
+    dl = mu['duration_list']
+    for n, pli in enumerate(pl):
+        pitch_where.append(np.where(pitch_mb == n))
+
+    for n, dli in enumerate(dl):
+        dur_where.append(np.where(dur_mb == n))
+
+    for n, pw in enumerate(pitch_where):
+        pitch_mb[pw] = pl[n]
+
+    for n, dw in enumerate(dur_where):
+        dur_mb[dw] = dl[n]
+
+    # print(mu["filename_list"][:2 * minibatch_size])
+    pitches_and_durations_to_pretty_midi(pitch_mb, dur_mb,
+                                         save_dir="samples/samples",
+                                         add_to_name=i * minibatch_size)
+dump_midi_player_template("samples")
+use_itr.reset()
+
+
 if not os.path.exists("samples"):
     os.mkdir("samples")
 
 dump_midi_player_template("samples")
 
 for i in range(n_reps):
-    pitch_mb, pitch_mask, dur_mb, dur_mask = next(valid_itr)
+    pitch_mb, pitch_mask, dur_mb, dur_mask = next(use_itr)
     mb = np.concatenate((pitch_mb, dur_mb), axis=-1)
     h0_init = np.zeros((minibatch_size, 2 * n_hid)).astype("float32")
     h0_i = h0_init
@@ -161,6 +192,8 @@ for i in range(n_reps):
             # needs to be 3D
             dur_mb = mb[n_t, :, -order:][None]
             pitch_mb = mb[n_t, :, :order][None]
+            pitch_mb_mask = mask[n_t, :][None]
+            dur_mb_mask = mask[n_t, :][None]
 
             cur_pitch_markov_mask = make_markov_mask(pitch_mb, pitch_mask, n_pitches, step_lookups_pitch)
             cur_dur_markov_mask = make_markov_mask(dur_mb, dur_mask, n_durations, step_lookups_duration)
@@ -185,17 +218,31 @@ for i in range(n_reps):
                 dur_pred = dur_preds[n_n].reshape((-1, shp[-1]))
 
                 def rn(pp, eps=1E-6):
-                    return pp / (pp.sum() + eps)
-                s_p = [random_state.multinomial(1, rn(pitch_pred[m_m])).argmax()
-                       for m_m in range(pitch_pred.shape[0])]
-                s_d = [random_state.multinomial(1, rn(dur_pred[m_m])).argmax()
-                       for m_m in range(dur_pred.shape[0])]
+                    pp[pp > eps] = pp[pp > eps] - eps
+                    pp[pp <= eps] = 0.
+                    return pp
+
+                s_p = []
+                for m_m in range(pitch_pred.shape[0]):
+                    s_pi = random_state.multinomial(1, rn(pitch_pred[m_m])).argmax()
+                    s_p.append(s_pi)
+
+                s_d = []
+                for m_m in range(dur_pred.shape[0]):
+                    s_di = random_state.multinomial(1, rn(dur_pred[m_m])).argmax()
+                    s_d.append(s_di)
+
+                #s_p = [random_state.multinomial(1, rn(pitch_pred[m_m])).argmax()
+                #       for m_m in range(pitch_pred.shape[0])]
+                #s_d = [random_state.multinomial(1, rn(dur_pred[m_m])).argmax()
+                #       for m_m in range(dur_pred.shape[0])]
 
                 s_p = np.array(s_p).reshape((shp[0], shp[1]))
                 s_d = np.array(s_d).reshape((shp[0], shp[1]))
 
                 pitch_pred = s_p
                 dur_pred = s_d
+
             if n_t > prime_step:
                 mb[n_t, :, n_n] = pitch_pred
                 mb[n_t, :, n_n + max_note] = dur_pred

@@ -32,7 +32,8 @@ mu = fetch_bach_chorales_music21()
 #mu = fetch_wikifonia_music21()
 
 #n_epochs = 500
-n_epochs = 2350
+#n_epochs = 2350
+n_epochs = 3000
 minibatch_size = 2
 order = mu["list_of_data_pitch"][0].shape[-1]
 n_in = 2 * order
@@ -56,7 +57,7 @@ lp = lp2
 ld = ld2
 
 # key can be major minor none
-key = "major"
+key = None
 if key is not None:
     lip = []
     lid = []
