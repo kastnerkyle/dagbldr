@@ -39,7 +39,7 @@ max_step = 70
 max_len = 150
 max_note = order
 prime_step = 25
-temperature = .00
+temperature = .05
 sm = lambda x: np_softmax_activation(x, temperature)
 if temperature == 0.:
     deterministic = True
@@ -129,12 +129,40 @@ if not os.path.exists("samples"):
 
 dump_midi_player_template("samples")
 
+
+def partial_mask_lookup(partial_mb, lookup):
+    all_att = []
+    for mbi in range(partial_mb.shape[1]):
+        uq = np.unique(partial_mb[:, mbi])
+        uq = tuple(uq)
+        lk = lookup.keys()
+        max_match = 0
+        max_match_key = None
+        for lik in lk:
+            for nn in range(1, len(uq)):
+                if lik[:nn] == uq[:nn]:
+                    if nn > max_match:
+                        max_match_key = lik
+                        max_match = nn
+                else:
+                    break
+        att = lookup[max_match_key]
+        all_att.append(att)
+    return all_att
+
+
 for i in range(n_reps):
     pitch_mb, pitch_mask, dur_mb, dur_mask = next(use_itr)
     mb = np.concatenate((pitch_mb, dur_mb), axis=-1)
 
-    pitch_att = mask_lookup(pitch_mb, lookups_pitch)
-    duration_att = mask_lookup(dur_mb, lookups_duration)
+    # choose the best matching key
+    pitch_att = partial_mask_lookup(pitch_mb[:prime_step], lookups_pitch)
+    duration_att = partial_mask_lookup(dur_mb[:prime_step], lookups_duration)
+
+    # gt version
+    #pitch_att = mask_lookup(pitch_mb, lookups_pitch)
+    #duration_att = mask_lookup(dur_mb, lookups_duration)
+
     mask_pitch_mbs = np.concatenate([pa[1][None] for pa in pitch_att], axis=0)
     mask_duration_mbs = np.concatenate([da[1][None] for da in duration_att], axis=0)
     extra_mask_mbs = np.concatenate((mask_pitch_mbs, mask_duration_mbs), axis=-1)
@@ -148,9 +176,15 @@ for i in range(n_reps):
     mask = mb[:, :, 0] * 0. + 1.
 
     for n_t in range(1, max_step - 1):
+        if n_t < prime_step:
+            for n_n in range(max_note):
+                mb[n_t, :, n_n] = mb_o[n_t, :, n_n]
+                mb[n_t, :, n_n + max_note] = mb_o[n_t, :, n_n + max_note]
+            continue
         print("Sampling timestep %i" % n_t)
         for n_n in range(max_note):
-            r = predict_function(mb[n_t - 1:n_t + 1], mask[n_t - 1:n_t + 1], h0_i, extra_mask_mbs)
+            r = predict_function(mb[n_t - 1:n_t + 1], mask[n_t - 1:n_t + 1],
+                                 h0_i, extra_mask_mbs)
             pitch_lins = r[:4]
             dur_lins = r[4:8]
 
@@ -167,26 +201,60 @@ for i in range(n_reps):
                 shp = dur_preds[n_n].shape
                 dur_pred = dur_preds[n_n].reshape((-1, shp[-1]))
 
-                # todo, fix sampler to not put mass on highest
-                def rn(pp, eps=1E-6):
+                def rn(pp, eps=1E-3):
                     return pp / (pp.sum() + eps)
-                s_p = [random_state.multinomial(1, rn(pitch_pred[m_m])).argmax()
-                       for m_m in range(pitch_pred.shape[0])]
-                s_d = [random_state.multinomial(1, rn(dur_pred[m_m])).argmax()
-                       for m_m in range(dur_pred.shape[0])]
+
+                s_p = []
+                s_d = []
+                for m_m in range(pitch_pred.shape[0]):
+                    s_ppi = pitch_pred[m_m]
+                    s_ppi_idx = np.where(s_ppi > 0.)[0]
+                    s_ddi = dur_pred[m_m]
+                    s_ddi_idx = np.where(s_ddi > 0.)[0]
+
+                    # subidx necessary since numpy puts extra prob on last idx
+                    # this ensures extra weight only added to "acceptable" moves
+                    s_ppi_sub = s_ppi[s_ppi_idx]
+                    s_ddi_sub = s_ddi[s_ddi_idx]
+
+                    if len(s_ppi_sub) > 0:
+                        s_pi = random_state.multinomial(
+                            1, rn(s_ppi_sub)).argmax()
+                        s_p.append(s_ppi_idx[s_pi])
+                    else:
+                        # no weight
+                        # choose from prior distribution over the voice
+                        counts = np.bincount(mb[:n_t, m_m, n_n].astype("int64"))
+                        counts = counts / counts.sum().astype("float32")
+                        counts_idx = np.where(counts > 0.)[0]
+                        counts_sub = counts[counts_idx]
+                        s_pi = random_state.multinomial(1, rn(counts_sub)).argmax()
+                        s_p.append(counts_idx[s_pi])
+
+                    if len(s_ddi_sub) > 0:
+                        s_di = random_state.multinomial(
+                            1, rn(s_ddi_sub)).argmax()
+                        s_d.append(s_ddi_idx[s_di])
+                    else:
+                        # no weight
+                        # choose from prior distribution over the voice
+                        counts = np.bincount(mb[:n_t, m_m, n_n + max_note].astype("int64"))
+                        counts = counts / counts.sum().astype("float32")
+                        counts_idx = np.where(counts > 0.)[0]
+                        counts_sub = counts[counts_idx]
+                        s_di = random_state.multinomial(1, rn(counts_sub)).argmax()
+                        s_d.append(counts_idx[s_di])
 
                 s_p = np.array(s_p).reshape((shp[0], shp[1]))
                 s_d = np.array(s_d).reshape((shp[0], shp[1]))
 
                 pitch_pred = s_p
                 dur_pred = s_d
-            if n_t > prime_step:
-                mb[n_t, :, n_n] = pitch_pred
-                mb[n_t, :, n_n + max_note] = dur_pred
-            else:
-                mb[n_t, :, n_n] = mb_o[n_t, :, n_n]
-                mb[n_t, :, n_n + max_note] = mb_o[n_t, :, n_n + max_note]
-        r = predict_function(mb[n_t - 1:n_t + 1], mask[n_t - 1:n_t + 1], h0_i, extra_mask_mbs)
+            mb[n_t, :, n_n] = pitch_pred
+            mb[n_t, :, n_n + max_note] = dur_pred
+
+        r = predict_function(mb[n_t - 1:n_t + 1], mask[n_t - 1:n_t + 1],
+                             h0_i, extra_mask_mbs)
         pitch_lins = r[:4]
         dur_lins = r[4:8]
         h0 = r[-1]
