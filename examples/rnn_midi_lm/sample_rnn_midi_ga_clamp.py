@@ -242,6 +242,7 @@ for i in range(n_reps):
     mb = np.zeros((max_step, mb.shape[1], mb.shape[2])).astype("float32")
     mb[0, :, :] = mb_o[0, :, :]
     mask = mb[:, :, 0] * 0. + 1.
+    chord_mask = mask.copy()
     mask = mask.astype("float32")
 
     for n_t in range(max_step - 1):
@@ -251,7 +252,7 @@ for i in range(n_reps):
                 mb[n_t, :, n_n + max_note] = mb_o[n_t, :, n_n + max_note]
 
             r = predict_function(mb, mask,
-                                 cond_mb,
+                                 cond_mb, chord_mask,
                                  enc_h0_i, enc_h0_r_i,
                                  dec_h0_i, k0_i, w0_i, extra_mask_mbs)
             pitch_lins = r[:4]
@@ -269,7 +270,7 @@ for i in range(n_reps):
         print("Sampling timestep %i" % n_t)
         for n_n in range(max_note):
             r = predict_function(mb, mask,
-                                 cond_mb,
+                                 cond_mb, chord_mask,
                                  enc_h0_i, enc_h0_r_i,
                                  dec_h0_i, k0_i, w0_i, extra_mask_mbs)
             pitch_lins = r[:4]
@@ -341,7 +342,7 @@ for i in range(n_reps):
             mb[n_t, :, n_n + max_note] = dur_pred
 
         r = predict_function(mb, mask,
-                             cond_mb,
+                             cond_mb, chord_mask,
                              enc_h0_i, enc_h0_r_i,
                              dec_h0_i, k0_i, w0_i, extra_mask_mbs)
         pitch_lins = r[:4]
@@ -377,5 +378,5 @@ for i in range(n_reps):
     pitches_and_durations_to_pretty_midi(pitch_mb, duration_mb,
                                          save_dir="samples/samples",
                                          name_tag="masked_sample_{}.mid",
-                                         voice_params="woodwinds",
+                                         voice_params="legend",
                                          add_to_name=i * mb.shape[1])

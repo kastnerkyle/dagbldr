@@ -15,6 +15,7 @@ from dagbldr.nodes import softmax_activation
 
 from dagbldr.nodes import categorical_crossentropy
 from dagbldr.nodes import masked_cost
+from dagbldr.nodes import reverse_with_mask
 
 from dagbldr import get_params
 from dagbldr.utils import create_checkpoint_dict
@@ -174,6 +175,9 @@ C_sym.tag.test_value = cond_mb
 A_mask_sym = tensor.fmatrix()
 A_mask_sym.tag.test_value = pitch_mask
 
+C_mask_sym = tensor.fmatrix()
+C_mask_sym.tag.test_value = chord_mask
+
 A_extra_mask_sym_2 = tensor.fmatrix()
 A_extra_mask_sym_2.tag.test_value = extra_mask_mbs
 
@@ -213,6 +217,8 @@ chord_dur_e = multiembed([C_sym[:, :, 1][:, :, None]], 1, n_chord_dur,
 
 X_chord_e_sym = chord_e
 X_chord_dur_e_sym = chord_dur_e
+X_chord_mask_sym = C_mask_sym
+
 
 y_tm1_pitch_e_sym = pitch_e[:-1]
 y_tm1_dur_e_sym = dur_e[:-1]
@@ -228,7 +234,12 @@ enc_h1_fork = lstm_fork([X_chord_e_sym, X_chord_dur_e_sym],
                         name="enc_h1_fork",
                         random_state=random_state, init_func=init)
 
-enc_h1_r_fork = lstm_fork([X_chord_e_sym[::-1], X_chord_dur_e_sym[::-1]],
+X_chord_e_r_sym = reverse_with_mask(X_chord_e_sym, X_chord_mask_sym,
+                                    minibatch_size)
+X_chord_dur_e_r_sym = reverse_with_mask(X_chord_dur_e_sym, X_chord_mask_sym,
+                                        minibatch_size)
+
+enc_h1_r_fork = lstm_fork([X_chord_e_r_sym, X_chord_dur_e_r_sym],
                           [n_chord_emb, n_chord_dur_emb], n_hid,
                           name="enc_h1_r_fork",
                           random_state=random_state, init_func=init)
@@ -241,14 +252,16 @@ def encoder_step(in_t, mask_t, in_r_t, mask_r_t, h1_tm1, h1_r_tm1):
     return enc_h1_t, enc_h1_r_t
 
 (enc_h1, enc_h1_r), _ = theano.scan(encoder_step,
-                          sequences=[enc_h1_fork, A_mask_sym,
-                                     enc_h1_r_fork, A_mask_sym[::-1]],
+                          sequences=[enc_h1_fork, X_chord_mask_sym,
+                                     enc_h1_r_fork, X_chord_mask_sym],
                           outputs_info=[enc_h0, enc_h0_r])
 
 enc_h1_o = slice_state(enc_h1, n_hid)
 enc_h1_r_o = slice_state(enc_h1_r, n_hid)
 
-enc_ctx = tensor.concatenate((enc_h1_o, enc_h1_r_o[::-1]), axis=2)
+enc_h1_r_o_r = reverse_with_mask(enc_h1_r_o, X_chord_mask_sym, minibatch_size)
+
+enc_ctx = tensor.concatenate((enc_h1_o, enc_h1_r_o_r), axis=2)
 
 y_tm1_pitch_e_sym = pitch_e[:-1]
 y_tm1_dur_e_sym = dur_e[:-1]
@@ -348,17 +361,17 @@ grads = gradient_clipping(grads, clip)
 opt = adam(params, learning_rate)
 updates = opt.updates(params, grads)
 
-fit_function = theano.function([A_sym, A_mask_sym, C_sym,
+fit_function = theano.function([A_sym, A_mask_sym, C_sym, C_mask_sym,
                                 enc_h0, enc_h0_r,
                                 dec_h0, k0, w0,
                                 A_extra_mask_sym_2],
                                [cost, h1], updates=updates)
-cost_function = theano.function([A_sym, A_mask_sym, C_sym,
+cost_function = theano.function([A_sym, A_mask_sym, C_sym, C_mask_sym,
                                 enc_h0, enc_h0_r,
                                 dec_h0, k0, w0,
                                 A_extra_mask_sym_2],
                                 [cost, h1])
-predict_function = theano.function([A_sym, A_mask_sym, C_sym,
+predict_function = theano.function([A_sym, A_mask_sym, C_sym, C_mask_sym,
                                     enc_h0, enc_h0_r,
                                     dec_h0, k0, w0,
                                     A_extra_mask_sym_2],
@@ -388,7 +401,8 @@ def train_loop(itr, info):
     # 2x once I add LSTM support...
     dec_h0_init = np.zeros((minibatch_size, n_hid)).astype("float32")
     mask = pitch_mask
-    cost, _ = fit_function(mb, mask, cond_mb, enc_h0_init, enc_h0_r_init,
+    cost, _ = fit_function(mb, mask, cond_mb, chord_mask,
+                           enc_h0_init, enc_h0_r_init,
                            dec_h0_init, k0_init, w0_init,
                            extra_mask_mbs)
     return [cost]
@@ -417,11 +431,11 @@ def valid_loop(itr, info):
     # 2x once I add LSTM support...
     dec_h0_init = np.zeros((minibatch_size, n_hid)).astype("float32")
     mask = pitch_mask
-    cost, _ = cost_function(mb, mask, cond_mb, enc_h0_init, enc_h0_r_init,
+    cost, _ = cost_function(mb, mask, cond_mb, chord_mask,
+                            enc_h0_init, enc_h0_r_init,
                             dec_h0_init, k0_init, w0_init,
                             extra_mask_mbs)
     return [cost]
-
 
 checkpoint_dict = create_checkpoint_dict(locals())
 
