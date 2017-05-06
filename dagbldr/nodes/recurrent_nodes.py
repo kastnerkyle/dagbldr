@@ -334,6 +334,15 @@ def gaussian_attention(list_of_step_inputs, list_of_step_input_dims,
         h_t = gru(fork1, previous_state, [next_proj_dim], next_proj_dim,
                   mask=step_mask, name=name + "_rec", random_state=random_state,
                   init_func="normal")
+    elif cell_type == "lstm":
+        raise ValueError("NYI")
+        fork1 = lstm_fork(list_of_step_inputs + [previous_attention_weight],
+                        list_of_step_input_dims + [conditioning_dim], next_proj_dim,
+                        name=name + "_fork", random_state=random_state,
+                        init_func="normal")
+        h_t = lstm(fork1, previous_state, [next_proj_dim], next_proj_dim,
+                   mask=step_mask, name=name + "_rec", random_state=random_state,
+                   init_func="normal")
     else:
         raise ValueError("Unsupported cell_type %s" % cell_type)
 
@@ -467,3 +476,22 @@ def softmax_attention(list_of_step_inputs, list_of_step_input_dims,
     else:
         raise ValueError("Unsupported cell_type %s" % cell_type)
     return h_t, alphas.T
+
+
+def reverse_with_mask(tensr, mask, minibatch_size):
+    """
+    useful for birnn tasks
+
+    assume tensr is 3D, mb_size is axis 1
+    assume tensr has been padded with 0s already
+    minibatch_size is an int - not TensorVariable!
+    """
+    revs = []
+    for i in range(minibatch_size):
+        vsubi = (mask[:, i] > 0.).nonzero()[0]
+        msubi = (mask[:, i] <= 0.).nonzero()[0]
+        maski = tensr[msubi, i]
+        tensri = tensr[vsubi, i]
+        tensri = tensri[::-1]
+        revs.append(tensor.concatenate((tensri, maski), axis=0)[:, None, :])
+    return tensor.concatenate(revs, axis=1)

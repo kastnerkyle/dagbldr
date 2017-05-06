@@ -36,9 +36,9 @@ n_hid = 64
 minibatch_size = 2
 n_reps = 10
 sm = lambda x: np_softmax_activation(x, temperature)
-max_step = 70
+max_step = 80
 max_note = order
-prime_step = 10
+prime_step = 40
 temperature = .1
 deterministic = False
 

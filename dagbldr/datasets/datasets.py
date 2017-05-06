@@ -1235,6 +1235,23 @@ def fetch_iamondb():
     return pickle_dict
 
 
+def music_21_to_chord_duration(p):
+    """
+    Takes in a Music21 score, and outputs two lists
+    List for chords (by string name)
+    List for durations
+    """
+    p_chords = p.chordify()
+    p_chords_o = p_chords.flat.getElementsByClass('Chord')
+    chord_list = []
+    duration_list = []
+    for ch in p_chords_o:
+        chord_list.append(ch.primeFormString)
+        #chord_list.append(ch.pitchedCommonName)
+        duration_list.append(ch.duration.quarterLength)
+    return chord_list, duration_list
+
+
 def music_21_to_pitch_duration(p):
     """
     Takes in a Music21 score, and outputs two numpy arrays
@@ -1290,6 +1307,8 @@ def _musicxml_extract(data_path, pickle_path, mxl_ext=".xml"):
         all_transposed_duration = []
         all_transposed_keys = []
         all_file_names = []
+        all_transposed_chord = []
+        all_transposed_chord_duration = []
         files = sorted([fi for fi in os.listdir(data_path) if mxl_ext in fi[-len(mxl_ext):]])
         for n, f in enumerate(files):
             file_path = os.path.join(data_path, f)
@@ -1306,40 +1325,31 @@ def _musicxml_extract(data_path, pickle_path, mxl_ext=".xml"):
                 continue
 
             p.keySignature = k
-            # cannot transpose? weird...
-            #i = interval.Interval(k.tonic, pitch.Pitch("C"))
-            #p = p.transpose(i)
-            #k = p.analyze("key")
-            key_shift = k.getTonic().pitchClass
-            #try:
-            pitches, durations = music_21_to_pitch_duration(p)
-            # to C (minor or major)
-            if key_shift > 6:
-                key_shift = 12 - key_shift
-                pitches = pitches + key_shift
-            else:
-                pitches = pitches - key_shift
-            # to A minor
             if "minor" in k.name:
-                # downshift
-                # c -> b -> bf -> a
-                pitches = pitches - 3
-            #if pitches.shape[0] != 4:
-                #from IPython import embed; embed(); raise ValueError()
-                #raise AttributeError("Too many voices, skipping...")
+               i = interval.Interval(k.tonic, pitch.Pitch("A"))
+               p = p.transpose(i)
+               k = p.analyze("key")
+            else:
+               i = interval.Interval(k.tonic, pitch.Pitch("C"))
+               p = p.transpose(i)
+               k = p.analyze("key")
+            chords, chord_durations = music_21_to_chord_duration(p)
+            pitches, durations = music_21_to_pitch_duration(p)
+
+            all_transposed_chord.append(chords)
+            all_transposed_chord_duration.append(chord_durations)
             all_transposed_pitch.append(pitches)
             all_transposed_duration.append(durations)
-            all_transposed_keys.append("C minor" if "minor" in k.name else "C major")
+            all_transposed_keys.append("A minor" if "minor" in k.name else "C major")
             all_file_names.append(f)
-            #except AttributeError:
-                # Random chord? skip it
-            #    logger.info("Conversion failed for {}".format(f))
-            #    pass
+
             if n % 25 == 0:
                 logger.info("Processed %s, progress %s / %s files complete" % (f, n + 1, len(files)))
         d = {"data_pitch": all_transposed_pitch,
              "data_duration": all_transposed_duration,
              "data_key": all_transposed_keys,
+             "data_chord": all_transposed_chord,
+             "data_chord_duration": all_transposed_chord_duration,
              "file_names": all_file_names}
         with open(pickle_path, "wb") as f:
             logger.info("Saving pickle file %s" % pickle_path)
@@ -1355,6 +1365,12 @@ def _musicxml_extract(data_path, pickle_path, mxl_ext=".xml"):
     major_duration = []
     minor_duration = []
 
+    major_chord = []
+    minor_chord = []
+
+    major_chord_duration = []
+    minor_chord_duration = []
+
     major_filename = []
     minor_filename = []
 
@@ -1364,16 +1380,27 @@ def _musicxml_extract(data_path, pickle_path, mxl_ext=".xml"):
         ddp = d["data_pitch"][i]
         ddd = d["data_duration"][i]
         nm = d["file_names"][i]
+        try:
+            ch = d["data_chord"][i]
+            chd = d["data_chord_duration"][i]
+        except IndexError:
+            ch = "null"
+            chd = -1
+
         if k == "C major":
             major_pitch.append(ddp)
             major_duration.append(ddd)
             major_filename.append(nm)
+            major_chord.append(ch)
+            major_chord_duration.append(chd)
             keys.append("C major")
-        elif k == "C minor":
+        elif k == "A minor":
             minor_pitch.append(ddp)
             minor_duration.append(ddd)
             minor_filename.append(nm)
-            keys.append("C minor")
+            minor_chord.append(ch)
+            minor_chord_duration.append(chd)
+            keys.append("A minor")
         else:
             raise ValueError("Unknown key %s" % k)
 
@@ -1395,6 +1422,9 @@ def _musicxml_extract(data_path, pickle_path, mxl_ext=".xml"):
     all_pitches = major_pitch + minor_pitch
     all_durations = major_duration + minor_duration
     all_filenames = major_filename + minor_filename
+    all_chord = major_chord + minor_chord
+    all_chord_duration = major_chord_duration + minor_chord_duration
+
     shps = [ap.shape for ap in all_pitches]
     shps0 = np.array([shpsi[0] for shpsi in shps])
     n_notes = np.unique(shps0)
@@ -1408,10 +1438,29 @@ def _musicxml_extract(data_path, pickle_path, mxl_ext=".xml"):
             max_count = r
             max_note = ni
 
+    final_chord_set = []
+    final_chord_duration_set = []
+    for n in range(len(all_chord)):
+        final_chord_set.extend(all_chord[n])
+        final_chord_duration_set.extend(all_chord_duration[n])
+
+    final_chord_set = sorted(set(final_chord_set))
+    final_chord_lookup = {k: v for k, v in zip(final_chord_set, range(len(final_chord_set)))}
+    final_chord_duration_set = sorted(set(final_chord_duration_set))
+    final_chord_duration_lookup = {k: v for k, v in zip(final_chord_duration_set, range(len(final_chord_duration_set)))}
+
+    final_chord = []
+    final_chord_duration = []
+    for n in range(len(all_chord)):
+        final_chord.append(np.array([final_chord_lookup[ch] for ch in all_chord[n]]).astype("float32"))
+        final_chord_duration.append(np.array([final_chord_duration_lookup[chd] for chd in all_chord_duration[n]]).astype("float32"))
+
     final_pitches = []
     final_durations = []
     final_filenames = []
     final_keys = []
+
+    invalid_idx = []
     for i in range(len(all_pitches)):
         n = all_pitches[i].shape[0]
         if n == max_note:
@@ -1420,8 +1469,23 @@ def _musicxml_extract(data_path, pickle_path, mxl_ext=".xml"):
             final_filenames.append(all_filenames[i])
             final_keys.append(keys[i])
         else:
+            invalid_idx.append(i)
             logger.info("Skipping file {}: {} had invalid note count != {}".format(
                 i, all_filenames[i], max_note))
+
+    # drop and align
+    final_chord = [fc for n, fc in enumerate(final_chord)
+                   if n not in invalid_idx]
+    final_chord_duration = [fcd for n, fcd in enumerate(final_chord_duration)
+                            if n not in invalid_idx]
+
+    final_chord = [fc[:final_pitches[n].shape[1]]
+                   for n, fc in enumerate(final_chord)]
+    final_chord_duration = [fcd[:final_pitches[n].shape[1]]
+                            for n, fcd in enumerate(final_chord_duration)]
+
+    all_chord = final_chord
+    all_chord_duration = final_chord_duration
 
     all_pitches = final_pitches
     all_durations = final_durations
@@ -1443,6 +1507,10 @@ def _musicxml_extract(data_path, pickle_path, mxl_ext=".xml"):
     d = {"list_of_data_pitch": ldp,
          "list_of_data_duration": ldd,
          "list_of_data_key": all_keys,
+         "list_of_data_chord": all_chord,
+         "list_of_data_chord_duration": all_chord_duration,
+         "chord_list": final_chord_set,
+         "chord_duration_list": final_chord_duration_set,
          "pitch_list": pitch_list,
          "duration_list": duration_list,
          "filename_list": all_filenames}

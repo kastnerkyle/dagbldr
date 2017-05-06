@@ -222,10 +222,11 @@ class list_of_array_iterator(base_iterator):
 
     def _slice_with_masks(self, ind):
         try:
-            cs = [[lc[i] for i in ind] for lc in self.list_of_containers]
+            cs = [[lc[i] if len(lc[i].shape) > 1 else lc[i][:, None] for i in ind]
+                  for lc in self.list_of_containers]
             max_len = np.max([len(lci) for ci in cs for lci in ci])
-            empties = [np.zeros((max_len, self.minibatch_size, lc[0].shape[-1]), dtype=np.float32)
-                       for lc in self.list_of_containers]
+            empties = [np.zeros((max_len, self.minibatch_size, csi[0].shape[-1]), dtype=np.float32)
+                       for csi in cs]
             ms = [np.ones_like(e[:, :, 0]) for e in empties]
             for n in range(len(empties)):
                 for c, i in enumerate(ind):

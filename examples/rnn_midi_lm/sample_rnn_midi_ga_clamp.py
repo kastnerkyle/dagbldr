@@ -30,16 +30,32 @@ mu = fetch_bach_chorales_music21()
 
 order = mu["list_of_data_pitch"][0].shape[-1]
 n_in = 2 * order
+
+n_pitches = len(mu["pitch_list"])
+n_dur = len(mu["duration_list"])
+
+n_chords = len(mu["chord_list"])
+n_chord_dur = len(mu["chord_duration_list"])
+
 n_pitch_emb = 20
 n_dur_emb = 4
-n_hid = 64
+
+n_chord_emb = 30
+n_chord_dur_emb = 4
+
+n_hid = 256
+n_ctx_ins = 2 * n_hid
+att_dim = 20
+
 minibatch_size = 2
-n_reps = 10
-max_step = 80
+
 max_len = 150
+
+n_reps = 10
+max_step = 50
 max_note = order
-prime_step = 40
-temperature = .0
+prime_step = 25
+temperature = 0.1
 sm = lambda x: np_softmax_activation(x, temperature)
 if temperature == 0.:
     deterministic = True
@@ -54,13 +70,20 @@ random_state = np.random.RandomState(1999)
 
 lp = mu["list_of_data_pitch"]
 ld = mu["list_of_data_duration"]
+lch = mu["list_of_data_chord"]
+lchd = mu["list_of_data_chord_duration"]
 
 lp2 = [lpi[:max_len] for n, lpi in enumerate(lp)]
 ld2 = [ldi[:max_len] for n, ldi in enumerate(ld)]
+lch2 = [lchi[:max_len] for n, lchi in enumerate(lch)]
+lchd2 = [lchdi[:max_len] for n, lchdi in enumerate(lchd)]
 
 lp = lp2
 ld = ld2
+lch = lch2
+lchd = lchd2
 
+"""
 # key can be major minor none
 key = None
 if key is not None:
@@ -72,6 +95,7 @@ if key is not None:
             lid.append(ld[n])
     lp = lip
     ld = lid
+"""
 
 
 # trying per-piece note clamping
@@ -115,12 +139,14 @@ def mask_lookup(mb, lookup):
 
 lookups_pitch, lookups_duration = make_mask_lookups(lp, ld)
 
-checkpoint_dict = fetch_checkpoint_dict(["rnn_midi_clamp"])
+checkpoint_dict = fetch_checkpoint_dict(["rnn_midi_ga_clamp"])
 predict_function = checkpoint_dict["predict_function"]
 
-train_itr = list_of_array_iterator([lp, ld], minibatch_size, stop_index=.9,
+train_itr = list_of_array_iterator([lp, ld, lch, lchd], minibatch_size,
+                                   stop_index=.9,
                                    randomize=True, random_state=random_state)
-valid_itr = list_of_array_iterator([lp, ld], minibatch_size, start_index=.9,
+valid_itr = list_of_array_iterator([lp, ld, lch, lchd], minibatch_size,
+                                   start_index=.9,
                                    randomize=True, random_state=random_state)
 use_itr = valid_itr
 
@@ -156,64 +182,112 @@ def partial_mask_lookup(partial_mb, lookup, random_state):
 
 
 for i in range(n_reps):
-    pitch_mb, pitch_mask, dur_mb, dur_mask = next(use_itr)
-    mb = np.concatenate((pitch_mb, dur_mb), axis=-1)
+    r = next(use_itr)
+    pitch_mb, pitch_mask, dur_mb, dur_mask = r[:4]
+    chord_mb, chord_mask, chord_dur_mb, chord_dur_mask = r[4:]
 
+    mb = np.concatenate((pitch_mb, dur_mb), axis=-1)
+    # stays as GT / valid
+    cond_mb = np.concatenate((chord_mb, chord_dur_mb), axis=-1)
+
+    """
     # choose the best matching key
     pitch_att = partial_mask_lookup(pitch_mb[:prime_step], lookups_pitch,
                                     random_state)
     duration_att = partial_mask_lookup(dur_mb[:prime_step], lookups_duration,
                                        random_state)
+    """
 
     # gt version
-    #pitch_att = mask_lookup(pitch_mb, lookups_pitch)
-    #duration_att = mask_lookup(dur_mb, lookups_duration)
+    pitch_att = mask_lookup(pitch_mb, lookups_pitch)
+    duration_att = mask_lookup(dur_mb, lookups_duration)
 
     mask_pitch_mbs = np.concatenate([pa[1][None] for pa in pitch_att], axis=0)
     mask_duration_mbs = np.concatenate([da[1][None] for da in duration_att], axis=0)
     extra_mask_mbs = np.concatenate((mask_pitch_mbs, mask_duration_mbs), axis=-1)
 
-    h0_init = np.zeros((minibatch_size, 2 * n_hid)).astype("float32")
-    h0_i = h0_init
+    enc_h0_init = np.zeros((minibatch_size, 2 * n_hid)).astype("float32")
+    enc_h0_r_init = np.zeros((minibatch_size, 2 * n_hid)).astype("float32")
+
+    k0_init = np.zeros((minibatch_size, att_dim)).astype("float32")
+    w0_init = np.zeros((minibatch_size, n_ctx_ins)).astype("float32")
+
+    # 2x once I add LSTM support...
+    dec_h0_init = np.zeros((minibatch_size, n_hid)).astype("float32")
+
+    mask = pitch_mask
+
+    """
+    r = predict_function(mb, mask, cond_mb, enc_h0_init, enc_h0_r_init,
+                         dec_h0_init, k0_init, w0_init,
+                         extra_mask_mbs)
+    raise ValueError()
+    """
+
+    enc_h0_i = enc_h0_init
+    enc_h0_r_i = enc_h0_r_init
+
+    dec_h0_i = dec_h0_init
+    k0_i = k0_init
+    w0_i = w0_init
+
+    """
+    r = predict_function(mb, mask, cond_mb, enc_h0_i, enc_h0_r_i,
+                         dec_h0_i, k0_i, w0_i,
+                         extra_mask_mbs)
+    raise ValueError()
+    """
 
     mb_o = copy.deepcopy(mb)
     mb = np.zeros((max_step, mb.shape[1], mb.shape[2])).astype("float32")
     mb[0, :, :] = mb_o[0, :, :]
     mask = mb[:, :, 0] * 0. + 1.
+    mask = mask.astype("float32")
 
-    for n_t in range(1, max_step - 1):
+    for n_t in range(max_step - 1):
         if n_t < prime_step:
             for n_n in range(max_note):
                 mb[n_t, :, n_n] = mb_o[n_t, :, n_n]
                 mb[n_t, :, n_n + max_note] = mb_o[n_t, :, n_n + max_note]
 
-            r = predict_function(mb[n_t - 1:n_t + 1], mask[n_t - 1:n_t + 1],
-                                 h0_i, extra_mask_mbs)
+            r = predict_function(mb, mask,
+                                 cond_mb,
+                                 enc_h0_i, enc_h0_r_i,
+                                 dec_h0_i, k0_i, w0_i, extra_mask_mbs)
             pitch_lins = r[:4]
             dur_lins = r[4:8]
-            h0 = r[-1]
-            h0_i = h0[-1]
+
+            dec_h_i = r[-3]
+            k_i = r[-2]
+            w_i = r[-1]
+
+            #k0_i = k_i[-1]
+            #w0_i = w_i[-1]
+            #dec_h0_i = dec_h_i[-1]
             continue
 
         print("Sampling timestep %i" % n_t)
         for n_n in range(max_note):
-            r = predict_function(mb[n_t - 1:n_t + 1], mask[n_t - 1:n_t + 1],
-                                 h0_i, extra_mask_mbs)
+            r = predict_function(mb, mask,
+                                 cond_mb,
+                                 enc_h0_i, enc_h0_r_i,
+                                 dec_h0_i, k0_i, w0_i, extra_mask_mbs)
             pitch_lins = r[:4]
             dur_lins = r[4:8]
 
             pitch_preds = [sm(pl) * mask_pitch_mbs for pl in pitch_lins]
             dur_preds = [sm(dl) * mask_duration_mbs for dl in dur_lins]
 
+            idx = n_t # - 1 # this is weird, but it sounds better...
             # deterministic
             if deterministic:
-                pitch_pred = pitch_preds[n_n].argmax(axis=-1)[0]
-                dur_pred = dur_preds[n_n].argmax(axis=-1)[0]
+                pitch_pred = pitch_preds[n_n].argmax(axis=-1)[idx]
+                dur_pred = dur_preds[n_n].argmax(axis=-1)[idx]
             else:
-                shp = pitch_preds[n_n].shape
-                pitch_pred = pitch_preds[n_n].reshape((-1, shp[-1]))
-                shp = dur_preds[n_n].shape
-                dur_pred = dur_preds[n_n].reshape((-1, shp[-1]))
+                shp = pitch_preds[n_n][idx].shape
+                pitch_pred = pitch_preds[n_n][idx].reshape((-1, shp[-1]))
+                shp = dur_preds[n_n][n_t].shape
+                dur_pred = dur_preds[n_n][idx].reshape((-1, shp[-1]))
 
                 def rn(pp, eps=1E-3):
                     return pp / (pp.sum() + eps)
@@ -259,20 +333,26 @@ for i in range(n_reps):
                         s_di = random_state.multinomial(1, rn(counts_sub)).argmax()
                         s_d.append(counts_idx[s_di])
 
-                s_p = np.array(s_p).reshape((shp[0], shp[1]))
-                s_d = np.array(s_d).reshape((shp[0], shp[1]))
-
+                s_p = np.array(s_p).reshape((shp[0],))
+                s_d = np.array(s_d).reshape((shp[0],))
                 pitch_pred = s_p
                 dur_pred = s_d
             mb[n_t, :, n_n] = pitch_pred
             mb[n_t, :, n_n + max_note] = dur_pred
 
-        r = predict_function(mb[n_t - 1:n_t + 1], mask[n_t - 1:n_t + 1],
-                             h0_i, extra_mask_mbs)
+        r = predict_function(mb, mask,
+                             cond_mb,
+                             enc_h0_i, enc_h0_r_i,
+                             dec_h0_i, k0_i, w0_i, extra_mask_mbs)
         pitch_lins = r[:4]
         dur_lins = r[4:8]
-        h0 = r[-1]
-        h0_i = h0[-1]
+        dec_h_i = r[-3]
+        k_i = r[-2]
+        w_i = r[-1]
+
+        #k0_i = k_i[-1]
+        #w0_i = w_i[-1]
+        #dec_h0_i = dec_h_i[-1]
 
     pitch_where = []
     duration_where = []
