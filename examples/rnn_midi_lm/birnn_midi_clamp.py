@@ -35,7 +35,8 @@ mu = fetch_bach_chorales_music21()
 #n_epochs = 500
 #n_epochs = 2350
 #n_epochs = 3000
-n_epochs = 300
+#n_epochs = 300
+n_epochs = 850
 minibatch_size = 2
 order = mu["list_of_data_pitch"][0].shape[-1]
 n_in = 2 * order
@@ -156,13 +157,14 @@ pitch_e = multiembed([A_sym[:, :, :order]], order, n_pitches, n_pitch_emb,
 dur_e = multiembed([A_sym[:, :, order:]], order, n_durs, n_dur_emb,
                         name="dur_embed", random_state=random_state)
 
-X_pitch_e_sym = pitch_e[:-2]
-X_dur_e_sym = dur_e[:-2]
-X_mask_sym = A_mask_sym[:-2]
+gap = 4
+X_pitch_e_sym = pitch_e[:-2 * gap]
+X_dur_e_sym = dur_e[:-2 * gap]
+X_mask_sym = A_mask_sym[:-2 * gap]
 
-X_pitch_e_next_sym = pitch_e[2:]
-X_dur_e_next_sym = dur_e[2:]
-X_mask_next_sym = A_mask_sym[2:]
+X_pitch_e_next_sym = pitch_e[2 * gap:]
+X_dur_e_next_sym = dur_e[2 * gap:]
+X_mask_next_sym = A_mask_sym[2 * gap:]
 
 X_fork = lstm_fork([X_pitch_e_sym, X_dur_e_sym, X_pitch_e_next_sym, X_dur_e_next_sym],
                    [order * n_pitch_emb, order * n_dur_emb, order * n_pitch_emb, order * n_dur_emb],
@@ -208,14 +210,23 @@ extra_mask_proj = linear([A_extra_mask_sym[0]],
 
 h_o = h_o + extra_mask_proj
 
-y_pitch_e_sym = pitch_e[1:-1]
-y_dur_e_sym = dur_e[1:-1]
+# 1:-2 * gap + 1 is one step ahead with extra backwards context
+# gap:-gap is gapped context, predict center
+y_pitch_e_sym = pitch_e[1:-2 * gap + 1]
+y_dur_e_sym = dur_e[1:-2 * gap + 1]
+
+y_pitch_sym = A_sym[1:-2 * gap + 1, :, :order]
+y_dur_sym = A_sym[1:-2 * gap + 1, :, order:]
+"""
+y_pitch_e_sym = pitch_e[gap:-1 * gap]
+y_dur_e_sym = dur_e[gap:-1 * gap]
+
+y_pitch_sym = A_sym[gap:-1 * gap, :, :order]
+y_dur_sym = A_sym[gap:-gap, :, order:]
+"""
 
 ar_y_pitch = automask([y_pitch_e_sym], order)
 ar_y_dur = automask([y_dur_e_sym], order)
-
-y_pitch_sym = A_sym[1:-1, :, :order]
-y_dur_sym = A_sym[1:-1, :, order:]
 
 pitch_lins = []
 dur_lins = []
