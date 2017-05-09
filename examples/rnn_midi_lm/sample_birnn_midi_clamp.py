@@ -35,10 +35,10 @@ n_dur_emb = 4
 n_hid = 64
 minibatch_size = 2
 n_reps = 10
-max_step = 70
+max_step = 100
 max_len = 150
 max_note = order
-prime_step = 25
+prime_step = 20
 temperature = .1
 sm = lambda x: np_softmax_activation(x, temperature)
 if temperature == 0.:
@@ -158,24 +158,22 @@ def partial_mask_lookup(partial_mb, lookup, random_state):
 for i in range(n_reps):
     pitch_mb, pitch_mask, dur_mb, dur_mask = next(use_itr)
     mb = np.concatenate((pitch_mb, dur_mb), axis=-1)
-    mask = mb[:, :, 0] * 0. + 1.
 
-    # where one of the 2 sequences ends
-    data_end = min([np.where(pitch_mask[:, z] > 0)[0][-1] for z in range(pitch_mask.shape[1])])
-    assert data_end > prime_step
-    # -2 to account for skip ahead training
-    # cut so that it is only data
-    mb = mb[:data_end]
-    mask = mask[:data_end]
-    data_end = data_end - 2
-    end = min(max_step, data_end)
+    prime_mb = np.zeros_like(mb[:prime_step])
+    for mbi in range(mb.shape[1]):
+        idx = np.where(pitch_mask[:, mbi] > 0.)[0]
+        lidx = idx[-1]
+        sub = int((lidx + 1) // prime_step)
+        prime_mb[:, mbi] = mb[::sub, mbi][:prime_step]
 
-    mb_o = copy.deepcopy(mb)
+    if sub <= 1:
+        print("Not subsampled enough!")
+        continue
 
     # choose the best matching key
-    pitch_att = partial_mask_lookup(mb[:prime_step, :, :order], lookups_pitch,
+    pitch_att = partial_mask_lookup(prime_mb[:, :, :order], lookups_pitch,
                                     random_state)
-    duration_att = partial_mask_lookup(mb[:prime_step, :, order:], lookups_duration,
+    duration_att = partial_mask_lookup(prime_mb[:, :, order:], lookups_duration,
                                        random_state)
 
     # gt version
@@ -191,25 +189,30 @@ for i in range(n_reps):
     h0_i = h0_init
     h0_r_i = h0_r_init
 
-    lr_pass = list(range(prime_step, end))
-    rl_pass = list(range(prime_step, end))[::-1]
-    random_pass = list(range(prime_step, end))
-    random_state.shuffle(random_pass)
+    fill_mb = copy.deepcopy(prime_mb)
+    n_t = prime_step
+    # - X depends on gap, should be - 2 * gap
+    idxs = list(range(len(fill_mb) - 1))
+    random_state.shuffle(idxs)
+    chosen = []
+    while True:
+        # random draw
+        rand_idx = idxs.pop(0)
+        chosen.append(rand_idx)
+        chosen = [ch + 1 if ch > rand_idx else ch for ch in chosen]
+        idxs = list(range(len(fill_mb) - 1))
+        idxs = [idxi for idxi in idxs if idxi not in chosen]
+        random_state.shuffle(idxs)
+        copied = fill_mb[rand_idx, :, :][None] * 0. #- 1.
+        expand_mb = np.concatenate((fill_mb[:rand_idx], copied, fill_mb[rand_idx:]), axis=0)
+        mask = expand_mb[:, :, 0] * 0. + 1.
+        if len(expand_mb) > max_step:
+            break
 
-    #all_steps = lr_pass + rl_pass + random_pass
-    #all_steps = lr_pass + random_pass
-    all_steps = lr_pass # * 3
-    #all_steps = lr_pass + rl_pass
-    #all_steps = rl_pass
-    #all_steps = lr_pass # + random_pass
-    #all_steps = random_pass
-    # interleaved
-    #all_steps = [val for pair in zip(lr_pass, rl_pass) for val in pair][:len(lr_pass)]
-
-    for n_t in all_steps:
         print("Sampling timestep %i" % n_t)
+        n_t = n_t + 1
         for n_n in range(max_note):
-            r = predict_function(mb, mask, h0_i, h0_r_i, extra_mask_mbs)
+            r = predict_function(expand_mb, mask, h0_i, h0_r_i, extra_mask_mbs)
             pitch_lins = r[:4]
             dur_lins = r[4:8]
 
@@ -218,14 +221,14 @@ for i in range(n_reps):
 
             # deterministic
             if deterministic:
-                pitch_pred = pitch_preds[n_n].argmax(axis=-1)[n_t]
-                dur_pred = dur_preds[n_n].argmax(axis=-1)[n_t]
+                pitch_pred = pitch_preds[n_n].argmax(axis=-1)[rand_idx]
+                dur_pred = dur_preds[n_n].argmax(axis=-1)[rand_idx]
             else:
-                pitch_shp = pitch_preds[n_n][n_t].shape
-                pitch_pred = pitch_preds[n_n][n_t].reshape((-1, pitch_shp[-1]))
+                pitch_shp = pitch_preds[n_n][rand_idx].shape
+                pitch_pred = pitch_preds[n_n][rand_idx].reshape((-1, pitch_shp[-1]))
 
-                dur_shp = dur_preds[n_n][n_t].shape
-                dur_pred = dur_preds[n_n][n_t].reshape((-1, dur_shp[-1]))
+                dur_shp = dur_preds[n_n][rand_idx].shape
+                dur_pred = dur_preds[n_n][rand_idx].reshape((-1, dur_shp[-1]))
 
                 def rn(pp, eps=1E-3):
                     return pp / (pp.sum() + eps)
@@ -277,19 +280,40 @@ for i in range(n_reps):
                 pitch_pred = s_p
                 dur_pred = s_d
 
-            mb[n_t, :, n_n] = pitch_pred
-            mb[n_t, :, n_n + max_note] = dur_pred
+            expand_mb[rand_idx, :, n_n] = pitch_pred
+            expand_mb[rand_idx, :, n_n + max_note] = dur_pred
+            fill_mb = copy.deepcopy(expand_mb)
 
     pitch_where = []
     duration_where = []
     pl = mu['pitch_list']
     dl = mu['duration_list']
+    pitch_mb = fill_mb[:, :, :order]
+    duration_mb = fill_mb[:, :, order:]
+    for n, pli in enumerate(pl):
+        pitch_where.append(np.where(pitch_mb == n))
 
-    diffs = [np.sum(np.abs(mb[prime_step:end, nnn] - mb_o[prime_step:end, nnn]))
-             for nnn in range(mb.shape[1])]
-    if any([di < 1. for di in diffs]):
-        print("Plagiaristic sample detected, skipping...")
-        continue
+    for n, dli in enumerate(dl):
+        duration_where.append(np.where(duration_mb == n))
+
+    for n, pw in enumerate(pitch_where):
+        pitch_mb[pw] = pl[n]
+
+    for n, dw in enumerate(duration_where):
+        duration_mb[dw] = dl[n]
+
+    pitch_mb = pitch_mb[prime_step:-prime_step]
+    duration_mb = duration_mb[prime_step:-prime_step]
+    pitches_and_durations_to_pretty_midi(pitch_mb, duration_mb,
+                                         save_dir="samples/samples",
+                                         name_tag="masked_sample_{}.mid",
+                                         voice_params="woodwinds",
+                                         add_to_name=i * mb.shape[1])
+
+    pitch_where = []
+    duration_where = []
+    pl = mu['pitch_list']
+    dl = mu['duration_list']
     pitch_mb = mb[:, :, :order]
     duration_mb = mb[:, :, order:]
     for n, pli in enumerate(pl):
@@ -304,33 +328,7 @@ for i in range(n_reps):
     for n, dw in enumerate(duration_where):
         duration_mb[dw] = dl[n]
 
-    pitch_mb = pitch_mb[prime_step:end]
-    duration_mb = duration_mb[prime_step:end]
     pitches_and_durations_to_pretty_midi(pitch_mb, duration_mb,
-                                         save_dir="samples/samples",
-                                         name_tag="masked_sample_{}.mid",
-                                         voice_params="woodwinds",
-                                         add_to_name=i * mb.shape[1])
-
-    pitch_where = []
-    duration_where = []
-    pl = mu['pitch_list']
-    dl = mu['duration_list']
-    # compare with orig
-    pitch_mb_o = mb_o[prime_step:end, :, :order]
-    duration_mb_o = mb_o[prime_step:end, :, order:]
-    for n, pli in enumerate(pl):
-        pitch_where.append(np.where(pitch_mb_o == n))
-
-    for n, dli in enumerate(dl):
-        duration_where.append(np.where(duration_mb_o == n))
-
-    for n, pw in enumerate(pitch_where):
-        pitch_mb_o[pw] = pl[n]
-
-    for n, dw in enumerate(duration_where):
-        duration_mb_o[dw] = dl[n]
-    pitches_and_durations_to_pretty_midi(pitch_mb_o, duration_mb_o,
                                          save_dir="samples/samples",
                                          name_tag="sample_{}.mid",
                                          voice_params="woodwinds",
