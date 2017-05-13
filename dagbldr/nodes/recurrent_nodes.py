@@ -309,6 +309,7 @@ def gaussian_attention(list_of_step_inputs, list_of_step_input_dims,
             w_t (attention weights for each element of conditioning tensor)
 
         Use w_t for following projection/prediction
+
     """
     if name is None:
         name = get_name()
@@ -335,7 +336,6 @@ def gaussian_attention(list_of_step_inputs, list_of_step_input_dims,
                   mask=step_mask, name=name + "_rec", random_state=random_state,
                   init_func="normal")
     elif cell_type == "lstm":
-        raise ValueError("NYI")
         fork1 = lstm_fork(list_of_step_inputs + [previous_attention_weight],
                         list_of_step_input_dims + [conditioning_dim], next_proj_dim,
                         name=name + "_fork", random_state=random_state,
@@ -358,8 +358,9 @@ def gaussian_attention(list_of_step_inputs, list_of_step_input_dims,
         ss4 = ss3.sum(axis=1)
         return ss4
 
+    h_sub_t = slice_state(h_t, next_proj_dim)
     ret = projection(
-        list_of_inputs=[h_t], list_of_input_dims=[next_proj_dim],
+        list_of_inputs=[h_sub_t], list_of_input_dims=[next_proj_dim],
         proj_dim=3 * att_dim, name=name, batch_normalize=batch_normalize,
         mode_switch=mode_switch, random_state=random_state,
         strict=strict, init_func="normal", act_func=linear_activation)

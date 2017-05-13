@@ -33,7 +33,6 @@ n_in = 2 * order
 
 n_pitches = len(mu["pitch_list"])
 n_dur = len(mu["duration_list"])
-
 n_chords = len(mu["chord_list"])
 n_chord_dur = len(mu["chord_duration_list"])
 
@@ -47,12 +46,12 @@ n_hid = 256
 n_ctx_ins = 2 * n_hid
 att_dim = 20
 
-minibatch_size = 2
+minibatch_size = 32
 
 max_len = 150
 
-n_reps = 10
-max_step = 50
+n_reps = 2
+max_step = 70
 max_note = order
 prime_step = 25
 temperature = 0.1
@@ -239,10 +238,11 @@ for i in range(n_reps):
     """
 
     mb_o = copy.deepcopy(mb)
-    mb = np.zeros((max_step, mb.shape[1], mb.shape[2])).astype("float32")
+    mb = 0. * mb # np.zeros((max_step, mb.shape[1], mb.shape[2])).astype("float32")
     mb[0, :, :] = mb_o[0, :, :]
     mask = mb[:, :, 0] * 0. + 1.
-    chord_mask = mask.copy()
+    chord_mask = 0. * chord_mask + 1.
+    chord_mask = chord_mask.astype("float32")
     mask = mask.astype("float32")
 
     for n_t in range(max_step - 1):
@@ -255,6 +255,7 @@ for i in range(n_reps):
                                  cond_mb, chord_mask,
                                  enc_h0_i, enc_h0_r_i,
                                  dec_h0_i, k0_i, w0_i, extra_mask_mbs)
+
             pitch_lins = r[:4]
             dur_lins = r[4:8]
 
@@ -378,5 +379,5 @@ for i in range(n_reps):
     pitches_and_durations_to_pretty_midi(pitch_mb, duration_mb,
                                          save_dir="samples/samples",
                                          name_tag="masked_sample_{}.mid",
-                                         voice_params="legend",
+                                         voice_params="woodwinds",
                                          add_to_name=i * mb.shape[1])

@@ -156,13 +156,18 @@ class list_of_array_iterator(base_iterator):
     def __init__(self, list_of_containers, minibatch_size,
                  start_index=0,
                  stop_index=np.inf,
+                 list_of_extra_info=None,
                  randomize=False,
                  reshuffle_on_reset=False,
                  random_state=None):
         self.list_of_containers = list_of_containers
+        self.list_of_extra_info = list_of_extra_info
         # all containers must be the same length
         for li in list_of_containers:
             assert len(li) == len(list_of_containers[0])
+        if list_of_extra_info is not None:
+            for lei in list_of_extra_info:
+                assert len(lei) == len(self.list_of_containers[0])
         self.minibatch_size = minibatch_size
 
         if start_index < 0:
@@ -218,7 +223,11 @@ class list_of_array_iterator(base_iterator):
             raise StopIteration("Stop index reached")
         ind = self._idx[self._current_offset:self._next_offset]
         self._current_offset = self._next_offset
-        return self._slice_with_masks(ind)
+        if self.list_of_extra_info is None:
+            return self._slice_with_masks(ind)
+        else:
+            r = self._slice_with_masks(ind)
+            return r + [[lei[i] for i in ind] for lei in self.list_of_extra_info]
 
     def _slice_with_masks(self, ind):
         try:
