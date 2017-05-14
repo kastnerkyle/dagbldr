@@ -22,6 +22,7 @@ import re
 import csv
 import time
 import signal
+import multiprocessing
 try:
     import cPickle as pickle
 except ImportError:
@@ -1321,16 +1322,16 @@ try:
 except ImportError:
     pass
 
-def _single_extract_music21(n, files, data_path, skip_chords,
-                            parse_timeout, verbose=False):
+def _single_extract_music21(files, data_path, skip_chords, verbose, n):
+    if verbose:
+        logger.info("Starting file {} of {}".format(n, len(files)))
     f = files[n]
     file_path = os.path.join(data_path, f)
 
     start_time = time.time()
 
     try:
-        with timeout(seconds=parse_timeout):
-            p = converter.parse(file_path)
+        p = converter.parse(file_path)
         k = p.analyze("key")
         parse_time = time.time()
         if verbose:
@@ -1414,6 +1415,19 @@ def _single_extract_music21(n, files, data_path, skip_chords,
     return (pitches, durations, str_key, f, p.quarterLength, chords, chord_durations)
 
 
+# http://stackoverflow.com/questions/29494001/how-can-i-abort-a-task-in-a-multiprocessing-pool-after-a-timeout
+def abortable_worker(func, *args, **kwargs):
+    # returns ("null",) if timeout
+    timeout = kwargs.get('timeout', None)
+    p = multiprocessing.dummy.Pool(1)
+    res = p.apply_async(func, args=args)
+    try:
+        out = res.get(timeout)  # Wait timeout seconds for func to complete.
+        return out
+    except multiprocessing.TimeoutError:
+        return ("null",)
+
+
 def _music_extract(data_path, pickle_path, ext=".xml",
                    pitch_augmentation=False,
                    skip_chords=True,
@@ -1445,13 +1459,19 @@ def _music_extract(data_path, pickle_path, ext=".xml",
             files = sorted([ap for ap in data_path if ap.endswith(ext)])
 
         #import pretty_midi
+        logger.info("Processing {} files".format(len(files)))
+        from multiprocessing import Pool
+        import functools
+        pool = Pool(4)
+        ex = functools.partial(_single_extract_music21,
+                               files, data_path,
+                               skip_chords, verbose)
+        abortable_ex = functools.partial(abortable_worker, ex, timeout=parse_timeout)
+        result = pool.map(abortable_ex, range(len(files)))
+        pool.close()
+        pool.join()
 
-        for n, f in enumerate(files):
-            logger.info("Started %s, progress %s / %s files complete" % (f, n + 1, len(files)))
-            r = _single_extract_music21(n, files, data_path,
-                                        parse_timeout,
-                                        skip_chords,
-                                        verbose=True)
+        for r in result:
             if r[0] != "null":
                 (pitches, durations,
                 key, fname, quarter_length,
@@ -1464,11 +1484,11 @@ def _music_extract(data_path, pickle_path, ext=".xml",
                 all_transposed_keys.append(key)
                 all_file_names.append(fname)
                 all_quarter_length.append(quarter_length)
-            logger.info("Processed %s, progress %s / %s files complete" % (f, n + 1, len(files)))
         gtime = time.time()
         if verbose:
             r = gtime - itime
             logger.info("Overall time {}".format(r))
+        from IPython import embed; embed(); raise ValueError()
         d = {"data_pitch": all_transposed_pitch,
              "data_duration": all_transposed_duration,
              "data_key": all_transposed_keys,
