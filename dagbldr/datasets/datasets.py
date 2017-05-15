@@ -1428,6 +1428,12 @@ def abortable_worker(func, *args, **kwargs):
         return ("null",)
 
 
+def count_unique(keys):
+    uniq_keys = np.unique(keys)
+    bins = uniq_keys.searchsorted(keys)
+    return uniq_keys, np.bincount(bins)
+
+
 def _music_extract(data_path, pickle_path, ext=".xml",
                    pitch_augmentation=False,
                    skip_chords=True,
@@ -1488,7 +1494,6 @@ def _music_extract(data_path, pickle_path, ext=".xml",
         if verbose:
             r = gtime - itime
             logger.info("Overall time {}".format(r))
-        from IPython import embed; embed(); raise ValueError()
         d = {"data_pitch": all_transposed_pitch,
              "data_duration": all_transposed_duration,
              "data_key": all_transposed_keys,
@@ -1693,13 +1698,21 @@ def _music_extract(data_path, pickle_path, ext=".xml",
     ldd = [replace_with_indices(ddi.T, duration_lu)[0][:, ::-1]
            for ddi in all_durations]
 
-    # hardcode to 4 for now...
     force_voices = equal_voice_count
-    def _trunc(a):
-        return a[:, :force_voices]
+    def _trunc(a, b):
+        # take most active voices?
+        actives = np.where(a > 0)[1]
+        xx, zz = count_unique(actives)
+        idx = np.sort(np.argsort(zz)[:force_voices])
+        return a[:, idx], b[:, idx]
+        #return a[:, -force_voices:], b[:, -force_voices:]
+        #return a[:, :force_voices], b[:, :force_voices]
 
-    def _ext(a):
-        return np.concatenate((a, np.zeros((a.shape[0], force_voices - a.shape[1])).astype(a.dtype)), axis=1)
+    def _ext(a, b):
+        # if extending, fill in SBAT order
+        new_a = np.concatenate((a, np.zeros((a.shape[0], force_voices - a.shape[1])).astype(a.dtype)), axis=1)
+        new_b = np.concatenate((b, np.zeros((b.shape[0], force_voices - b.shape[1])).astype(b.dtype)), axis=1)
+        return new_a, new_b
 
     new_ldp = []
     new_ldd = []
@@ -1708,11 +1721,9 @@ def _music_extract(data_path, pickle_path, ext=".xml",
             pp = ldp[ii]
             dd = ldd[ii]
         elif ldp[ii].shape[1] < force_voices:
-            pp = _ext(ldp[ii])
-            dd = _ext(ldd[ii])
+            pp, dd = _ext(ldp[ii], ldd[ii])
         elif ldp[ii].shape[1] > force_voices:
-            pp = _trunc(ldp[ii])
-            dd = _trunc(ldd[ii])
+            pp, dd = _trunc(ldp[ii], ldd[ii])
         new_ldp.append(pp)
         new_ldd.append(dd)
     ldp = new_ldp
@@ -1815,7 +1826,9 @@ def check_fetch_bach_chorales_music21():
 
 def fetch_bach_chorales_music21(keys=["C major", "A minor"],
                                 truncate_length=100,
-                                verbose=False):
+                                compress_pitch=False,
+                                compress_duration=False,
+                                verbose=True):
     """
     Bach chorales, transposed to C major or A minor (depending on original key).
     Only contains chorales with 4 voices populated.
@@ -1850,7 +1863,7 @@ def fetch_bach_chorales_music21(keys=["C major", "A minor"],
     data_path = check_fetch_bach_chorales_music21()
     pickle_path = os.path.join(data_path, "__processed_bach.pkl")
     mu = _music_extract(data_path, pickle_path, ext=".mxl",
-                        skip_chords=False, verbose=verbose)
+                        skip_chords=False, equal_voice_count=4, verbose=verbose)
 
     lp = mu["list_of_data_pitch"]
     ld = mu["list_of_data_duration"]
@@ -1882,6 +1895,24 @@ def fetch_bach_chorales_music21(keys=["C major", "A minor"],
     lch = lch2
     lchd = lchd2
     lql = lql2
+
+    def _fixup(mb, lookup_list):
+        mb = mb.copy()
+        where = []
+        for n, li in enumerate(lookup_list):
+            where.append(np.where(mb == n))
+
+        for n, w in enumerate(where):
+            mb[w] = lookup_list[n]
+        return mb
+
+    if not compress_pitch:
+        pl = mu["pitch_list"]
+        lp = [_fixup(lpi, pl) for lpi in lp]
+
+    if not compress_duration:
+        dl = mu["duration_list"]
+        ld = [_fixup(ldi, dl) for ldi in ld]
 
     mu["list_of_data_pitch"] = lp
     mu["list_of_data_duration"] = ld
@@ -2001,18 +2032,25 @@ def fetch_lakh_midi_music21(keys=["C major", "A minor"],
     search_term = None
     if subset == "chopin":
         search_term = "chopin"
+        subset_idx = [int(ai.split(" ")[1].split(":")[0])
+                     for ai in all_info
+                     if search_term in ai.lower()]
+    elif subset == "pop":
+        all_idx = []
+        for st in ["jackson", "beatles", "backstreet", "madonna", "beach_boys",
+                   "beach boys", "britney"]:
+            subset_idx = [int(ai.split(" ")[1].split(":")[0])
+                          for ai in all_info if st in ai.lower()]
+            all_idx.extend(subset_idx)
     else:
         raise ValueError("Invalid subset {}".format(subset))
-    subset_idx = [int(ai.split(" ")[1].split(":")[0])
-                  for ai in all_info
-                  if search_term in ai.lower()]
 
     subset_idx = sorted(list(set(subset_idx)))
 
     all_paths = [ap for n, ap in enumerate(all_paths) if n in subset_idx]
     pickle_path = os.path.join(data_path, "__processed_lakh_{}.pkl".format(subset))
     return _music_extract(all_paths, pickle_path, ext=".mid",
-                          skip_chords=True, verbose=True)
+                          skip_chords=True, verbose=True, equal_voice_count=1)
 
 
 def check_fetch_haralick_midi_music21():
@@ -2082,7 +2120,8 @@ def pitches_and_durations_to_pretty_midi(pitches, durations,
     durations assumed to be scaled to quarter lengths e.g. 1 is 1 quarter note
     2 is a half note, etc
     """
-    default_quarter_length = 80
+
+    default_quarter_length = 110
     import pretty_midi
     # BTAS mapping
     def weird():
