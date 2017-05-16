@@ -29,7 +29,7 @@ n_iter = 0
 
 pitch_clusters = 8192
 dur_clusters = 1024
-from_scratch = False
+from_scratch = True
 
 pitch_oh_size = 89
 dur_oh_size = 12
@@ -57,6 +57,7 @@ valid_itr = list_of_array_iterator([lp, ld], minibatch_size,
 r = next(valid_itr)
 pitch_mb, pitch_mask, dur_mb, dur_mask = r[:4]
 qpms = r[-1]
+
 
 def oh_3d(a, oh_size="max"):
     if oh_size == "max":
@@ -126,7 +127,41 @@ def unfixup_dur_list(dur_list):
         new.append(ldi)
     return new
 
+
+def fixup_pitch_list(pitch_list):
+    new = []
+    pl = mu["pitch_list"]
+
+    for lpi in pitch_list:
+        lpi = lpi.copy()
+        pitch_where = []
+        for n, pli in enumerate(pl):
+            pitch_where.append(np.where(lpi == pli))
+
+        for n, pw in enumerate(pitch_where):
+            lpi[pw] = n
+        new.append(lpi)
+    return new
+
+
+def unfixup_pitch_list(pitch_list):
+    new = []
+    pl = mu["pitch_list"]
+    for lpi in pitch_list:
+        lpi = lpi.copy().astype("float32")
+        pitch_where = []
+        for n, pli in enumerate(pl):
+            pitch_where.append(np.where(lpi == n))
+
+        for n, pw in enumerate(pitch_where):
+            lpi[pw] = pl[n]
+        new.append(lpi)
+    return new
+
+
 ld = fixup_dur_list(ld)
+lp = fixup_pitch_list(lp)
+
 
 if from_scratch or not os.path.exists("dur_codebook.npy"):
     dur_codebook = get_codebook(ld, n_components=dur_clusters, n_iter=n_iter, oh_size=dur_oh_size)
@@ -140,6 +175,7 @@ if from_scratch or not os.path.exists("pitch_codebook.npy"):
     np.save("pitch_codebook.npy", pitch_codebook)
 else:
     pitch_codebook = np.load("pitch_codebook.npy")
+
 
 def pre_d(dmb):
     list_of_dur = [dmb[:, i, :] for i in range(dmb.shape[1])]
@@ -159,7 +195,13 @@ def pre_d(dmb):
 
 def pre_p(pmb):
     list_of_pitch = [pmb[:, i, :] for i in range(pmb.shape[1])]
+    o_list_of_pitch = list_of_pitch
+    list_of_pitch = fixup_pitch_list(list_of_pitch)
+
     q_list_of_pitch, q_list_of_pitch_codes = quantize(list_of_pitch, pitch_codebook, pitch_oh_size)
+    o_q_list_of_pitch = q_list_of_pitch
+    q_list_of_pitch = unfixup_pitch_list(q_list_of_pitch)
+
     q_list_of_pitch = [qlp[:, None, :] for qlp in q_list_of_pitch]
     q_list_of_pitch_codes = [qlpc[:, None, None] for qlpc in q_list_of_pitch_codes]
     q_pitch_mb = np.concatenate(q_list_of_pitch, axis=1)
