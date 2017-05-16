@@ -10,7 +10,7 @@ from scipy.cluster.vq import vq
 
 def minibatch_kmedians(X, M=None, n_components=10, n_iter=100,
                        minibatch_size=100, random_state=None,
-                       init_type="data", shuffle_minibatches=True,
+                       init_type="exhaustive_data", shuffle_minibatches=True,
                        verbose=False):
     """
     Example usage:
@@ -38,8 +38,46 @@ def minibatch_kmedians(X, M=None, n_components=10, n_iter=100,
             ind = np.arange(len(X)).astype('int32')
             random_state.shuffle(ind)
             M = X[ind[:n_clusters]]
+        elif init_type == "exhaustive_data":
+            ind = np.arange(len(X)).astype('int32')
+            random_state.shuffle(ind)
+            M = X[ind[:n_clusters]]
+            clean = False
+            pass_itr = 0
+            bail_at = 10
+            npi = n_clusters
+            while not clean and pass_itr < bail_at:
+                if verbose:
+                    print("Picking centers, iter {}".format(pass_itr))
+                pass_itr += 1
+                clean = True
+                for n, Mi in enumerate(M):
+                    repeats = (Mi == M).all(axis=1)
+                    # self-match means always 1 will match
+                    if sum(repeats) > 1:
+                        clean = False
+                        repeat_idx = np.where(repeats > 0)[0]
+                        # don't resample backwards
+                        repeat_idx = repeat_idx[repeat_idx > n]
+                        if len(repeat_idx) == 0:
+                            continue
+                        else:
+                            npi_e = npi + len(repeat_idx)
+                            if npi_e >= len(ind):
+                                npi_e = len(ind)
+                            M[repeat_idx[:npi_e - npi]] = X[ind[npi:npi_e]]
+                            npi = npi_e
+                            if npi_e == len(ind):
+                                break
+            if pass_itr >= bail_at:
+                if verbose:
+                    print("WARNING: Some repeated cluster centers may remain")
         else:
             raise ValueError("Unknown init_type {}".format(init_type))
+    if n_iter == 0:
+        return M
+    elif n_iter < 0:
+        raise ValueError("n_iter {} should be >= 0!".format(n_iter))
 
     center_counts = np.zeros(n_clusters)
     pts = list(np.arange(0, len(X), minibatch_size)) + [len(X)]
@@ -51,7 +89,7 @@ def minibatch_kmedians(X, M=None, n_components=10, n_iter=100,
         random_state.shuffle(minibatch_indices)
     for i in range(n_iter):
         if verbose:
-            print("Iter {}".format(i))
+            print("iter {}".format(i))
         if shuffle_minibatches:
             random_state.shuffle(minibatch_indices)
         for n, (mb_s, mb_e) in enumerate(minibatch_indices):

@@ -2121,7 +2121,7 @@ def pitches_and_durations_to_pretty_midi(pitches, durations,
     2 is a half note, etc
     """
 
-    default_quarter_length = 110
+    default_quarter_length = 40
     import pretty_midi
     # BTAS mapping
     def weird():
