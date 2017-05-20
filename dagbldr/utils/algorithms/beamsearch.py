@@ -55,12 +55,13 @@ class Beam(object):
         return iter(self.heap)
 
 
-def beamsearch(probabilities_function, beam_width=10, clip_len=-1,
-               start_token="<START>", end_token="<EOS>", use_log=True,
-               renormalize=True, length_score=True,
-               stochastic=False, temperature=1.0,
-               random_state=None, eps=1E-9):
+def _beamsearch(probabilities_function, beam_width=10, clip_len=-1,
+                start_token="<START>", end_token="<EOS>", use_log=True,
+                renormalize=True, length_score=True,
+                stochastic=False, temperature=1.0,
+                random_state=None, eps=1E-9):
     """
+    THIS IS THE CORE ALGORITHM - WRAPPED SO THAT IT RETURNS ON SCORE, RATHER THAN LENGTH (AS IN YIELD/GENERATOR)
     From http://geekyisawesome.blogspot.ca/2017/04/getting-top-n-most-probable-sentences.html
 
     returns a generator, which will yield beamsearched sequences in order of their probability
@@ -211,3 +212,55 @@ def beamsearch(probabilities_function, beam_width=10, clip_len=-1,
                                  stochastic, temperature, random_state)
         else:
             prev_beam = curr_beam
+
+
+def beamsearch(probabilities_function, beam_width=10, clip_len=-1,
+               start_token="<START>", end_token="<EOS>", use_log=True,
+               renormalize=True, length_score=True,
+               stochastic=False, temperature=1.0,
+               random_state=None, eps=1E-9):
+    """
+    From http://geekyisawesome.blogspot.ca/2017/04/getting-top-n-most-probable-sentences.html
+
+    returns a generator, which will yield beamsearched sequences in order of their probability
+
+    "probabilities_function" returns a list of (next_prob, next_word) pairs given a prefix.
+
+    "beam_width" is the number of prefixes to keep (so that instead of keeping the top 10 prefixes you can keep the top 100 for example).
+    By making the beam search bigger you can get closer to the actual most probable sentence but it would also take longer to process.
+
+    "clip_len" is a maximum length to tolerate, beyond which the most probable prefix is returned as an incomplete sentence.
+    Without a maximum length, a faulty probabilities function which does not return a highly probable end token
+    will lead to an infinite loop or excessively long garbage sentences.
+
+    "start_token" can be a single string (token), or a sequence of tokens
+
+    "end_token" is a single string (token), or a sequence of tokens that signifies end of the sequence
+
+    "use_log, renormalize, length_score" are all related to calculation of beams to keep
+    and should improve results when True
+
+    "stochastic" uses a different sampling algorithm for reducing/aggregating beams
+    it should result in more diverse and interesting outputs
+
+    "temperature" is the softmax temperature for the underlying stochastic
+    beamsearch - the default of 1.0 is usually fine
+
+    "random_state" is a np.random.RandomState() object, passed when using the
+    stochastic beamsearch in order to control randomness
+
+    "eps" minimum probability for log-space calculations, to avoid numerical issues
+    """
+    b = _beamsearch(probabilities_function, beam_width=beam_width,
+                    clip_len=clip_len, start_token=start_token,
+                    end_token=end_token, use_log=use_log,
+                    renormalize=renormalize, length_score=length_score,
+                    stochastic=stochastic, temperature=temperature,
+                    random_state=random_state, eps=eps)
+    all_results = []
+    # get all beams
+    for result in b:
+        all_results.append(result)
+    # sort by score
+    all_results  = sorted(all_results, key=lambda x: x[1])
+    return all_results

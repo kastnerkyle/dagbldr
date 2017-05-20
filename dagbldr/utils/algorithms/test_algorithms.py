@@ -27,6 +27,7 @@ def test_beamsearch():
         for vb in vocab:
             pseudo_lm[k][vb] = 0
 
+    # add counts
     for se in sentences:
         s = 0
         for n in range(len(se[:-order])):
@@ -35,6 +36,7 @@ def test_beamsearch():
             s = s + 1
             pseudo_lm[k][v] += 1
 
+        # normalize
         s = 0
         for n in range(len(se[:-order])):
             k = ord(se[s:s + order])

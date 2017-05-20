@@ -10,10 +10,11 @@ from dagbldr.datasets import fetch_wikifonia_music21
 from dagbldr.datasets import fetch_haralick_midi_music21
 from dagbldr.datasets import fetch_lakh_midi_music21
 
-from dagbldr.utils import minibatch_kmedians
+from dagbldr.utils import minibatch_kmedians, beamsearch
 
 import os
 import cPickle as pickle
+import copy
 
 #mu = fetch_lakh_midi_music21(subset="pop")
 mu = fetch_bach_chorales_music21()
@@ -29,7 +30,7 @@ n_iter = 0
 
 pitch_clusters = 8192
 dur_clusters = 1024
-from_scratch = True
+from_scratch = False
 
 pitch_oh_size = len(mu["pitch_list"])
 dur_oh_size = len(mu["duration_list"])
@@ -54,9 +55,9 @@ valid_itr = list_of_array_iterator([lp, ld], minibatch_size,
                                    start_index=.9,
                                    randomize=True, random_state=random_state)
 
-r = next(valid_itr)
+r = next(train_itr)
 pitch_mb, pitch_mask, dur_mb, dur_mask = r[:4]
-qpms = r[-1]
+train_itr.reset()
 
 
 def oh_3d(a, oh_size):
@@ -91,6 +92,28 @@ def quantize(list_of_arr, codebook, oh_size):
         q_oh_a = q_oh_a.reshape(-1, shp[1], shp[2]).argmax(axis=-1)
         quantized_arr.append(q_oh_a)
     return quantized_arr, list_of_codes
+
+
+def codebook_lookup(list_of_code_arr, codebook, last_shape=4):
+    reconstructed_arr = []
+    for arr in list_of_code_arr:
+        pitch_slices = []
+        oh_codes = codebook[arr]
+        pitch_size = codebook.shape[1] // last_shape
+        boundaries = np.arange(1, last_shape + 1, 1) * pitch_size
+        for i in range(len(oh_codes)):
+            pitch_slice = np.where(oh_codes[i] == 1)[0]
+            for n, bo in enumerate(boundaries):
+                if len(pitch_slice) <= n:
+                    pitch_slice = np.insert(pitch_slice, len(pitch_slice), 0)
+                elif pitch_slice[n] >= bo:
+                    pitch_slice = np.insert(pitch_slice, n, 0)
+                else:
+                    pass
+            pitch_slices.append(pitch_slice % pitch_size)
+        new_arr = np.array(pitch_slices).astype("float32")
+        reconstructed_arr.append(new_arr)
+    return reconstructed_arr
 
 
 def fixup_dur_list(dur_list):
@@ -206,8 +229,130 @@ def pre_p(pmb):
     q_code_mb = np.concatenate(q_list_of_pitch_codes, axis=1).astype("float32")
     return q_pitch_mb, q_code_mb
 
+
+def accumulate(mb, counter_dict, order):
+    counter_dict = copy.deepcopy(counter_dict)
+    for mi in range(mb.shape[1]):
+        si = order
+        for ni in range(len(mb) - order - 1):
+            se = si - order
+            ee = si
+            prefix = tuple(mb[se:ee, mi].ravel())
+            next_i = mb[ee, mi].ravel()[0]
+            if prefix not in counter_dict.keys():
+                counter_dict[prefix] = {}
+
+            if next_i not in counter_dict[prefix].keys():
+                counter_dict[prefix][next_i] = 1
+            else:
+                counter_dict[prefix][next_i] += 1
+            si += 1
+    return counter_dict
+
+
+def normalize(counter_dict):
+    counter_dict = copy.deepcopy(counter_dict)
+    for k in counter_dict.keys():
+        sub_d = copy.deepcopy(counter_dict[k])
+
+        tot = 0.
+        for sk in sub_d.keys():
+            tot += sub_d[sk]
+
+        for sk in sub_d.keys():
+            sub_d[sk] /= float(tot)
+
+        counter_dict[k] = sub_d
+    return counter_dict
+
+
+from collections import Counter, defaultdict
+
+pitch_order = 2
+dur_order = 1
+p_total_frequency = {}
+d_total_frequency = {}
+
+for r in train_itr:
+    pitch_mb, pitch_mask, dur_mb, dur_mask = r[:4]
+    q_pitch_mb, q_pitch_code_mb = pre_p(pitch_mb)
+    q_dur_mb, q_dur_code_mb = pre_d(dur_mb)
+    # add 2 for start and eos
+    q_pitch_code_mb += 2
+    q_dur_code_mb += 2
+    # start is 0, end is 1
+    st_p = q_pitch_code_mb[0][None] * 0.
+    e_p = q_pitch_code_mb[0][None] * 0. + 1
+    st_d = q_dur_code_mb[0][None] * 0.
+    e_d = q_dur_code_mb[0][None] * 0. + 1
+    q_pitch_code_mb = np.concatenate((st_p, q_pitch_code_mb, e_p))
+    q_dur_code_mb = np.concatenate((st_d, q_dur_code_mb, e_d))
+    p_frequency = copy.deepcopy(p_total_frequency)
+    d_frequency = copy.deepcopy(d_total_frequency)
+    p_frequency = accumulate(q_pitch_code_mb, p_frequency, pitch_order)
+    d_frequency = accumulate(q_dur_code_mb, d_frequency, dur_order)
+    p_total_frequency.update(p_frequency)
+    d_total_frequency.update(d_frequency)
+
+p_total_frequency = normalize(p_total_frequency)
+d_total_frequency = normalize(d_total_frequency)
+
+def p_prob_func(prefix):
+    history = prefix[-pitch_order:]
+    lu = tuple(history)
+    dist_lookup = p_total_frequency[lu]
+    dist = [(v, k) for k, v in dist_lookup.items()]
+    return dist
+
+def d_prob_func(prefix):
+    history = prefix[-1]
+    lu = tuple(history)
+    dist_lookup = d_total_frequency[lu]
+    dist = [(v, k) for k, v in dist_lookup.items()]
+    return dist
+
+a = next(valid_itr)
+pitch_mb, pitch_mask, dur_mb, dur_mask = a[:4]
 q_pitch_mb, q_pitch_code_mb = pre_p(pitch_mb)
 q_dur_mb, q_dur_code_mb = pre_d(dur_mb)
+qpms = r[-1]
+
+start_token = [0, int(q_pitch_code_mb[0, 0, 0])]
+end_token = 1
+stochastic = True
+beam_width = 10
+clip = 50
+random_state = np.random.RandomState(90210)
+db = beamsearch(d_prob_func, beam_width,
+                start_token=start_token,
+                end_token=end_token,
+                clip_len=clip,
+                stochastic=stochastic,
+                random_state=random_state)
+
+quantized_pitch_seqs = codebook_lookup([np.array(pbi[0]).astype("int32") for pbi in pb], pitch_codebook, 4)
+quantized_dur_seqs = codebook_lookup([np.array(dbi[0]).astype("int32") for dbi in db], dur_codebook, 4)
+from IPython import embed; embed(); raise ValueError()
+
+start_token = 0
+end_token = 1
+stochastic = True
+beam_width = 10
+clip = 50
+random_state = np.random.RandomState(90210)
+pb = beamsearch(p_prob_func, beam_width,
+                start_token=start_token,
+                end_token=end_token,
+                clip_len=clip,
+                stochastic=stochastic,
+                random_state=random_state)
+
+quantized_pitch_seqs = codebook_lookup([np.array(pbi[0]).astype("int32") for pbi in pb], pitch_codebook, 4)
+
+
+from IPython import embed; embed(); raise ValueError()
+
+sampled_dur = dur_mb[:, 0, :]
 
 i = 0
 pitches_and_durations_to_pretty_midi(pitch_mb, dur_mb,

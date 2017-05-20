@@ -69,9 +69,25 @@ def minibatch_kmedians(X, M=None, n_components=10, n_iter=100,
                             npi = npi_e
                             if npi_e == len(ind):
                                 break
-            if pass_itr >= bail_at:
-                if verbose:
-                    print("WARNING: Some repeated cluster centers may remain")
+
+            if not clean and pass_itr >= bail_at:
+                original_size = len(M)
+                for n, Mi in enumerate(M):
+                    repeats = (Mi == M).all(axis=1)
+                    # self-match means always 1 will match
+                    if sum(repeats) > 1:
+                        repeat_idx = np.where(repeats > 0)[0]
+                        # remove forward repeat clusters
+                        repeat_idx = repeat_idx[repeat_idx > n]
+                        if len(repeat_idx) == 0:
+                            continue
+                        else:
+                            to_keep = np.array(sorted(list(set(np.arange(len(M))) - set(repeat_idx))))
+                            M = M[to_keep]
+
+                final_size = len(M)
+                if verbose and n_iter == 0:
+                    print("WARNING: Collapsed repeated cluster centers, from size {} to {}".format(original_size, final_size))
         else:
             raise ValueError("Unknown init_type {}".format(init_type))
     if n_iter == 0:
@@ -111,7 +127,27 @@ def minibatch_kmedians(X, M=None, n_components=10, n_iter=100,
             g_error = (diff_error / np.sqrt(sq_error + 1E-9))
             Mi = Mi - scaled_lr * g_error
             M[centers] = Mi
+
     # Reassign centers to nearest datapoint
     mem, _ = vq(M, X)
     M = X[mem]
+
+    # remove repeats
+    original_size = len(M)
+    for n, Mi in enumerate(M):
+        repeats = (Mi == M).all(axis=1)
+        # self-match means always 1 will match
+        if sum(repeats) > 1:
+            repeat_idx = np.where(repeats > 0)[0]
+            # remove forward repeat clusters
+            repeat_idx = repeat_idx[repeat_idx > n]
+            if len(repeat_idx) == 0:
+                continue
+            else:
+                to_keep = np.array(sorted(list(set(np.arange(len(M))) - set(repeat_idx))))
+                M = M[to_keep]
+
+    final_size = len(M)
+    if verbose:
+        print("WARNING: Collapsed repeated cluster centers, from size {} to {}".format(original_size, final_size))
     return M
