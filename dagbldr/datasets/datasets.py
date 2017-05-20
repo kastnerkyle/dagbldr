@@ -2050,7 +2050,7 @@ def fetch_lakh_midi_music21(keys=["C major", "A minor"],
     all_paths = [ap for n, ap in enumerate(all_paths) if n in subset_idx]
     pickle_path = os.path.join(data_path, "__processed_lakh_{}.pkl".format(subset))
     return _music_extract(all_paths, pickle_path, ext=".mid",
-                          skip_chords=True, verbose=True, equal_voice_count=1)
+                          skip_chords=True, verbose=True, equal_voice_count=4)
 
 
 def check_fetch_haralick_midi_music21():

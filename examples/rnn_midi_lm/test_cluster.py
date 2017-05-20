@@ -31,8 +31,8 @@ pitch_clusters = 8192
 dur_clusters = 1024
 from_scratch = True
 
-pitch_oh_size = 89
-dur_oh_size = 12
+pitch_oh_size = len(mu["pitch_list"])
+dur_oh_size = len(mu["duration_list"])
 
 order = mu["list_of_data_pitch"][0].shape[-1]
 
@@ -59,9 +59,7 @@ pitch_mb, pitch_mask, dur_mb, dur_mask = r[:4]
 qpms = r[-1]
 
 
-def oh_3d(a, oh_size="max"):
-    if oh_size == "max":
-        oh_size = a.max()
+def oh_3d(a, oh_size):
     return (np.arange(oh_size) == a[:, :, None] - 1).astype(int)
 
 
@@ -215,13 +213,13 @@ i = 0
 pitches_and_durations_to_pretty_midi(pitch_mb, dur_mb,
                                      save_dir="samples/samples",
                                      name_tag="test_sample_{}.mid",
-                                     list_of_quarter_length = qpms,
+                                     #list_of_quarter_length = qpms,
                                      voice_params="woodwinds",
                                      add_to_name=i * pitch_mb.shape[1])
 
 pitches_and_durations_to_pretty_midi(q_pitch_mb, q_dur_mb,
                                      save_dir="samples/samples",
                                      name_tag="test_quantized_sample_{}.mid",
-                                     list_of_quarter_length = qpms,
+                                     #list_of_quarter_length = qpms,
                                      voice_params="woodwinds",
                                      add_to_name=i * q_pitch_mb.shape[1])
