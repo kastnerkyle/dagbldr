@@ -268,8 +268,7 @@ def normalize(counter_dict):
 
 from collections import Counter, defaultdict
 
-pitch_order = 10
-dur_order = 10
+joint_order = 6
 p_total_frequency = {}
 d_total_frequency = {}
 
@@ -277,70 +276,54 @@ for r in train_itr:
     pitch_mb, pitch_mask, dur_mb, dur_mask = r[:4]
     q_pitch_mb, q_pitch_code_mb = pre_p(pitch_mb)
     q_dur_mb, q_dur_code_mb = pre_d(dur_mb)
-    # add 2 for start and eos
-    #q_pitch_code_mb += 2
-    #q_dur_code_mb += 2
-    # start is 0, end is 1
-    #st_p = q_pitch_code_mb[0][None] * 0.
-    #e_p = q_pitch_code_mb[0][None] * 0. + 1
-    #st_d = q_dur_code_mb[0][None] * 0.
-    ##e_d = q_dur_code_mb[0][None] * 0. + 1
-    #q_pitch_code_mb = np.concatenate((st_p, q_pitch_code_mb, e_p))
-    #q_dur_code_mb = np.concatenate((st_d, q_dur_code_mb, e_d))
     p_frequency = copy.deepcopy(p_total_frequency)
     d_frequency = copy.deepcopy(d_total_frequency)
-    p_frequency = accumulate(q_pitch_code_mb, p_frequency, pitch_order)
-    d_frequency = accumulate(q_dur_code_mb, d_frequency, dur_order)
+    p_frequency = accumulate(q_pitch_code_mb, p_frequency, joint_order)
+    d_frequency = accumulate(q_dur_code_mb, d_frequency, joint_order)
     p_total_frequency.update(p_frequency)
     d_total_frequency.update(d_frequency)
 
 p_total_frequency = normalize(p_total_frequency)
 d_total_frequency = normalize(d_total_frequency)
 
-def p_prob_func(prefix):
-    history = prefix[-pitch_order:]
-    lu = tuple(history)
+
+def rolloff_lookup(lookup_dict, lookup_key):
+    """ roll off lookups n, n-1, n-2, n-3, down to random choice at 0 """
+    lk = lookup_key
+    ld = lookup_dict
     try:
-        dist_lookup = p_total_frequency[lu]
+        dist_lookup = lookup_dict[lk]
     except KeyError:
-        for oi in range(1, pitch_order):
-            if oi == (pitch_order - 1):
-               # choose one of the notes that happened before...
-               sub_keys = sorted(list(set(prefix)))
+        for oi in range(1, len(lookup_key)):
+            if oi == (len(lookup_key) - 1):
+               # choose one of the elements of the lookup...
+               sub_keys = sorted(list(set(lookup_key)))
                dist_lookup = {sk: 1. / len(sub_keys) for sk in sub_keys}
                break
             else:
-                # smooth roll-off
-                sub_keys = [ki for ki in p_total_frequency.keys() if lu[oi:] == ki[oi:]]
+                sub_keys = [ki for ki in lookup_dict.keys() if lk[oi:] == ki[oi:]]
                 if len(sub_keys) > 0:
                    random_state.shuffle(sub_keys)
-                   dist_lookup = p_total_frequency[sub_keys[0]]
+                   dist_lookup = lookup_dict[sub_keys[0]]
                    break
-    dist = [(v, k) for k, v in dist_lookup.items()]
-    return dist
+    return dist_lookup
 
 
-def d_prob_func(prefix):
-    history = prefix[-dur_order:]
-    lu = tuple(history)
-    try:
-        dist_lookup = d_total_frequency[lu]
-    except KeyError:
-        for oi in range(1, pitch_order):
-            if oi == (pitch_order - 1):
-               # choose one of the notes that happened before...
-               sub_keys = sorted(list(set(prefix)))
-               dist_lookup = {sk: 1. / len(sub_keys) for sk in sub_keys}
-               break
-            else:
-                # smooth roll-off
-                sub_keys = [ki for ki in d_total_frequency.keys() if lu[oi:] == ki[oi:]]
-                if len(sub_keys) > 0:
-                   random_state.shuffle(sub_keys)
-                   dist_lookup = d_total_frequency[sub_keys[0]]
-                   break
-    dist = [(v, k) for k, v in dist_lookup.items()]
+def prob_func(prefix):
+    history = prefix[-joint_order:]
+    pitch_history = [h[0] for h in history]
+    dur_history = [h[1] for h in history]
+    p_lu = tuple(pitch_history)
+    d_lu = tuple(dur_history)
+    pitch_dist = rolloff_lookup(p_total_frequency, p_lu)
+    dur_dist = rolloff_lookup(d_total_frequency, d_lu)
+    dist = []
+    # model as p(x, y) = p(x) * p(y)
+    for pk in pitch_dist.keys():
+        for dk in dur_dist.keys():
+            dist.append((pitch_dist[pk] * dur_dist[dk], (pk, dk)))
     return dist
+
 
 a = next(valid_itr)
 pitch_mb, pitch_mask, dur_mb, dur_mask = a[:4]
@@ -351,35 +334,25 @@ qpms = r[-1]
 final_pitches = []
 final_durs = []
 for mbi in range(minibatch_size):
-    #start_token = [0] + [int(qp) for qp in list(q_pitch_code_mb[:order, 0, 0])]
-    start_token = [int(qp) for qp in list(q_pitch_code_mb[:order, mbi, 0])]
+    start_pitch_token = [int(qp) for qp in list(q_pitch_code_mb[:joint_order, mbi, 0])]
+    start_dur_token = [int(dp) for dp in list(q_dur_code_mb[:joint_order, mbi, 0])]
+    start_token = [tuple([qp, dp]) for qp, dp in zip(start_pitch_token, start_dur_token)]
     stochastic = True
     beam_width = 10
     clip = 100
     random_state = np.random.RandomState(90210)
-    pb = beamsearch(p_prob_func, beam_width,
-                    start_token=start_token,
-                    #end_token=end_token,
-                    clip_len=clip,
-                    stochastic=stochastic,
-                    random_state=random_state)
+    b = beamsearch(prob_func, beam_width,
+                   start_token=start_token,
+                   #end_token=end_token,
+                   clip_len=clip,
+                   stochastic=stochastic,
+                   random_state=random_state)
 
-    quantized_pitch_seqs = codebook_lookup([np.array(pbi[0]).astype("int32") for pbi in pb], pitch_codebook, 4)
+    # for all beams, take the sequence (p[0]) and the respective type (ip[0] for pitch, ip[1] for dur)
+    # last number (4) for reconstruction to actual data (4 voices)
+    quantized_pitch_seqs = codebook_lookup([np.array([ip[0] for ip in p[0]]).astype("int32") for p in b], pitch_codebook, 4)
+    quantized_dur_seqs = codebook_lookup([np.array([ip[1] for ip in p[0]]).astype("int32") for p in b], dur_codebook, 4)
 
-    #start_token = [0] + [int(qd) for qd in list(q_dur_code_mb[:order, 0, 0])]
-    start_token = [int(qd) for qd in list(q_dur_code_mb[:order, mbi, 0])]
-    stochastic = True
-    beam_width = 10
-    clip = 100
-    random_state = np.random.RandomState(90210)
-    db = beamsearch(d_prob_func, beam_width,
-                    start_token=start_token,
-                    #end_token=end_token,
-                    clip_len=clip,
-                    stochastic=stochastic,
-                    random_state=random_state)
-
-    quantized_dur_seqs = codebook_lookup([np.array(dbi[0]).astype("int32") for dbi in db], dur_codebook, 4)
     # take top beams
     final_pitches.append(quantized_pitch_seqs[0])
     final_durs.append(quantized_dur_seqs[0])
@@ -421,6 +394,10 @@ for n, dw in enumerate(duration_where):
 
 
 i = 0
+pitch_mb = pitch_mb[joint_order:]
+dur_mb = dur_mb[joint_order:]
+q_pitch_mb = q_pitch_mb[joint_order:]
+q_dur_mb = q_dur_mb[joint_order:]
 pitches_and_durations_to_pretty_midi(pitch_mb, dur_mb,
                                      save_dir="samples/samples",
                                      name_tag="test_sample_{}.mid",

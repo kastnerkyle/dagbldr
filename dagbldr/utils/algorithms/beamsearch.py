@@ -222,7 +222,7 @@ def beamsearch(probabilities_function, beam_width=10, clip_len=-1,
     """
     From http://geekyisawesome.blogspot.ca/2017/04/getting-top-n-most-probable-sentences.html
 
-    returns a generator, which will yield beamsearched sequences in order of their probability
+    returns a list of tuples (seqeunce, score, prob) in order from best score to worst
 
     "probabilities_function" returns a list of (next_prob, next_word) pairs given a prefix.
 
@@ -261,6 +261,6 @@ def beamsearch(probabilities_function, beam_width=10, clip_len=-1,
     # get all beams
     for result in b:
         all_results.append(result)
-    # sort by score
-    all_results  = sorted(all_results, key=lambda x: x[1])
+    # sort by score, top down
+    all_results  = sorted(all_results, key=lambda x: x[1], reverse=True)
     return all_results
