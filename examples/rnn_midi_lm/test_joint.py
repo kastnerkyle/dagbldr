@@ -28,8 +28,8 @@ mu = fetch_bach_chorales_music21()
 minibatch_size = 10
 n_iter = 0
 
-pitch_clusters = 8192
-dur_clusters = 1024
+pitch_clusters = 32000
+dur_clusters = 4000
 from_scratch = False
 
 pitch_oh_size = len(mu["pitch_list"])
@@ -132,7 +132,7 @@ def fixup_dur_list(dur_list):
     return new
 
 
-def unfixup_dur_list(dur_list):
+def unfixup_dur_list(dur_list, hack=True):
     new = []
     dl = mu["duration_list"]
     for ldi in dur_list:
@@ -141,11 +141,14 @@ def unfixup_dur_list(dur_list):
         for n, dli in enumerate(dl):
             dur_where.append(np.where(ldi == n))
 
-        # gross hackz needed since -1 and 0 perform the same function...
-        # fix it?
-        for n, dw in enumerate(dur_where[:-1]):
-            ldi[dw] = dl[n] if n == 0 else dl[n + 1]
-        new.append(ldi)
+        if hack:
+            for n, dw in enumerate(dur_where[:-2]):
+                ldi[dw] = dl[n] if n <= 1 else dl[n + 2]
+            new.append(ldi)
+        else:
+            for n, dw in enumerate(dur_where):
+                ldi[dw] = dl[n]
+            new.append(ldi)
     return new
 
 
@@ -182,6 +185,7 @@ def unfixup_pitch_list(pitch_list):
 
 ld = fixup_dur_list(ld)
 lp = fixup_pitch_list(lp)
+from IPython import embed; embed(); raise ValueError()
 
 
 if from_scratch or not os.path.exists("dur_codebook.npy"):
@@ -198,14 +202,20 @@ else:
     pitch_codebook = np.load("pitch_codebook.npy")
 
 
-def pre_d(dmb):
+def pre_d(dmb, quantize_it=True):
     list_of_dur = [dmb[:, i, :] for i in range(dmb.shape[1])]
     o_list_of_dur = list_of_dur
     list_of_dur = fixup_dur_list(list_of_dur)
 
-    q_list_of_dur, q_list_of_dur_codes = quantize(list_of_dur, dur_codebook, dur_oh_size)
-    o_q_list_of_dur = q_list_of_dur
-    q_list_of_dur = unfixup_dur_list(q_list_of_dur)
+    if quantize:
+        q_list_of_dur, q_list_of_dur_codes = quantize(list_of_dur, dur_codebook, dur_oh_size)
+        o_q_list_of_dur = q_list_of_dur
+        q_list_of_dur = unfixup_dur_list(q_list_of_dur, hack=True)
+    else:
+        q_list_of_dur = list_of_dur
+        # garbage
+        q_list_of_dur_codes = list_of_dur
+        q_list_of_dur = unfixup_dur_list(q_list_of_dur, hack=False)
 
     q_list_of_dur = [qld[:, None, :] for qld in q_list_of_dur]
     q_list_of_dur_codes = [qldc[:, None, None] for qldc in q_list_of_dur_codes]
@@ -214,13 +224,18 @@ def pre_d(dmb):
     return q_dur_mb, q_code_mb
 
 
-def pre_p(pmb):
+def pre_p(pmb, quantize_it=True):
     list_of_pitch = [pmb[:, i, :] for i in range(pmb.shape[1])]
     o_list_of_pitch = list_of_pitch
     list_of_pitch = fixup_pitch_list(list_of_pitch)
 
-    q_list_of_pitch, q_list_of_pitch_codes = quantize(list_of_pitch, pitch_codebook, pitch_oh_size)
-    o_q_list_of_pitch = q_list_of_pitch
+    if quantize:
+        q_list_of_pitch, q_list_of_pitch_codes = quantize(list_of_pitch, pitch_codebook, pitch_oh_size)
+        o_q_list_of_pitch = q_list_of_pitch
+    else:
+        q_list_of_pitch = list_of_pitch
+        # garbage
+        q_list_of_pitch_codes = list_of_pitch
     q_list_of_pitch = unfixup_pitch_list(q_list_of_pitch)
 
     q_list_of_pitch = [qlp[:, None, :] for qlp in q_list_of_pitch]
@@ -266,9 +281,7 @@ def normalize(counter_dict):
     return counter_dict
 
 
-from collections import Counter, defaultdict
-
-joint_order = 6
+joint_order = 10
 p_total_frequency = {}
 d_total_frequency = {}
 
@@ -327,8 +340,12 @@ def prob_func(prefix):
 
 a = next(valid_itr)
 pitch_mb, pitch_mask, dur_mb, dur_mask = a[:4]
-q_pitch_mb, q_pitch_code_mb = pre_p(pitch_mb)
-q_dur_mb, q_dur_code_mb = pre_d(dur_mb)
+pitch_mb, _ = pre_p(pitch_mb, quantize_it=False)
+dur_mb, _ = pre_d(dur_mb, quantize_it=False)
+
+n_pitch_mb, n_pitch_mask, n_dur_mb, n_dur_mask = a[:4]
+q_pitch_mb, q_pitch_code_mb = pre_p(n_pitch_mb)
+q_dur_mb, q_dur_code_mb = pre_d(n_dur_mb)
 qpms = r[-1]
 
 final_pitches = []
@@ -337,13 +354,14 @@ for mbi in range(minibatch_size):
     start_pitch_token = [int(qp) for qp in list(q_pitch_code_mb[:joint_order, mbi, 0])]
     start_dur_token = [int(dp) for dp in list(q_dur_code_mb[:joint_order, mbi, 0])]
     start_token = [tuple([qp, dp]) for qp, dp in zip(start_pitch_token, start_dur_token)]
+    end_token = [(start_token[0][0], None)]
     stochastic = True
     beam_width = 10
-    clip = 100
+    clip = 75
     random_state = np.random.RandomState(90210)
     b = beamsearch(prob_func, beam_width,
                    start_token=start_token,
-                   #end_token=end_token,
+                   end_token=end_token,
                    clip_len=clip,
                    stochastic=stochastic,
                    random_state=random_state)
@@ -380,6 +398,7 @@ duration_where = []
 pl = mu['pitch_list']
 dl = mu['duration_list']
 
+
 for n, pli in enumerate(pl):
     pitch_where.append(np.where(q_pitch_mb == n))
 
@@ -394,20 +413,22 @@ for n, dw in enumerate(duration_where):
 
 
 i = 0
-pitch_mb = pitch_mb[joint_order:]
-dur_mb = dur_mb[joint_order:]
-q_pitch_mb = q_pitch_mb[joint_order:]
-q_dur_mb = q_dur_mb[joint_order:]
+# ext in order to avoid influence of "priming"
+ext = int(joint_order // 2) + 1
+pitch_mb = pitch_mb[joint_order + ext:]
+dur_mb = dur_mb[joint_order + ext:]
+q_pitch_mb = q_pitch_mb[joint_order + ext:]
+q_dur_mb = q_dur_mb[joint_order + ext:]
 pitches_and_durations_to_pretty_midi(pitch_mb, dur_mb,
                                      save_dir="samples/samples",
                                      name_tag="test_sample_{}.mid",
-                                     #list_of_quarter_length = qpms,
+                                     #list_of_quarter_length=[int(.5 * qpm) for qpm in qpms],
                                      voice_params="woodwinds",
                                      add_to_name=i * pitch_mb.shape[1])
 
 pitches_and_durations_to_pretty_midi(q_pitch_mb, q_dur_mb,
                                      save_dir="samples/samples",
                                      name_tag="test_quantized_sample_{}.mid",
-                                     #list_of_quarter_length = qpms,
+                                     #list_of_quarter_length=qpms,
                                      voice_params="woodwinds",
                                      add_to_name=i * q_pitch_mb.shape[1])

@@ -77,7 +77,7 @@ def _beamsearch(probabilities_function, beam_width=10, clip_len=-1,
 
     "start_token" can be a single string (token), or a sequence of tokens
 
-    "end_token" is a single string (token), or a sequence of tokens that signifies end of the sequence
+    "end_token" is a single string (token), or a sequence of tokens that signifies end of the sequence. If token is a list of tuple, can set elements of last tuple to None for partial matching
 
     "use_log, renormalize, length_score" are all related to calculation of beams to keep
     and should improve results when True
@@ -123,6 +123,25 @@ def _beamsearch(probabilities_function, beam_width=10, clip_len=-1,
         # make it a list with 1 entry
         end_token = [end_token]
         end_token_is_seq = False
+
+    # can't compare none with string...
+    any_none = [et for et in end_token if not isinstance(et, basestring) and None in et]
+    none_compare = True if len(any_none) > 0 else False
+
+    if none_compare:
+        try:
+            # one of these should barf
+            et = end_token[0][0]
+            # should barf...
+            len(et)
+            if not isinstance(et, basestring):
+                raise ValueError("Shouldn't be string...")
+            #raise AttributeError("End token with tuples should be passed as a list")
+        except:
+            pass
+
+        if len(any_none) > 1 or any_none[-1] != end_token[-1]:
+            raise ValueError("Can only compare to None for the last element! Change value for end_token, currently {}".format(end_token))
 
     if use_log:
         prev_beam.add(.0, False, .0, start_token)
@@ -171,13 +190,23 @@ def _beamsearch(probabilities_function, beam_width=10, clip_len=-1,
                         prob = prefix_prob * n
 
                     if end_token_is_seq:
-                        left_cmp = prefix[-len(end_token) + 1:] + [next_word]
+                        if len(end_token) > 1:
+                            left_cmp = prefix[-len(end_token) + 1:] + [next_word]
+                        else:
+                            left_cmp = [next_word]
                         right_cmp = end_token
+                        if none_compare:
+                            lpartial = (left_cmp[:-1] == right_cmp[:-1])
+                            rpartial = all([lc == rc for lc, rc in zip(left_cmp, right_cmp) if rc is not None])
+                            cmp_result = all([lpartial, rpartial])
+                        else:
+                            cmp_result = (left_cmp == right_cmp)
                     else:
                         left_cmp = next_word
                         right_cmp = end_token[0]
+                        cmp_result = (left_cmp == right_cmp)
 
-                    if left_cmp == right_cmp:
+                    if cmp_result:
                         # If next word is the end token then mark prefix as complete
                         curr_beam.add(score, True, prob, prefix + [next_word])
                     else:
@@ -235,7 +264,7 @@ def beamsearch(probabilities_function, beam_width=10, clip_len=-1,
 
     "start_token" can be a single string (token), or a sequence of tokens
 
-    "end_token" is a single string (token), or a sequence of tokens that signifies end of the sequence
+    "end_token" is a single string (token), or a sequence of tokens that signifies end of the sequence. If token is a tuple, can set elements to None for partial matching
 
     "use_log, renormalize, length_score" are all related to calculation of beams to keep
     and should improve results when True

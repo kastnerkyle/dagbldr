@@ -1279,8 +1279,20 @@ def music21_to_pitch_duration(p):
         parts.append(part)
         parts_times.append(part_time)
 
+    cumulative_times = map(lambda x: np.cumsum(x), parts_times)
+    # shift so all starts at 0
+    cumulative_times = [cu - cu[0] for cu in cumulative_times]
+    # find event times and align them
+    parts = [np.array(part) for part in parts]
+    parts_times = [np.array(part_time) for part_time in parts_times]
+    total_set = set()
+    for pi in range(len(parts)):
+        total_set = total_set | set(list(cumulative_times[pi]))
+    total_set = sorted(list(set(total_set)))
+    to_fill = np.zeros((len(p.parts), maxlen)).astype("int32") - 1
+
+    from IPython import embed; embed(); raise ValueError()
     # Create a "block" of events and times
-    cumulative_times = map(lambda x: list(np.cumsum(x)), parts_times)
     event_points = sorted(list(set(sum(cumulative_times, []))))
     maxlen = max(map(len, cumulative_times))
     # -1 marks invalid / unused
@@ -1352,6 +1364,27 @@ def _single_extract_music21(files, data_path, skip_chords, verbose, n):
 
     # none if there is no data aug
     an = "C" if "major" in k.name else "A"
+
+    pc = pitch.Pitch(an)
+    i = interval.Interval(k.tonic, pc)
+    p = p.transpose(i)
+    k = p.analyze("key")
+    transpose_time = time.time()
+    if verbose:
+        r = transpose_time - start_time
+        logger.info("Transpose time {}:{}".format(f, r))
+
+    if skip_chords:
+        chords = ["null"]
+        chord_durations = ["null"]
+    else:
+        chords, chord_durations = music21_to_chord_duration(p)
+    pitches, durations = music21_to_pitch_duration(p)
+    pitch_duration_time = time.time()
+    if verbose:
+        r = pitch_duration_time - start_time
+        logger.info("music21 to pitch_duration time {}:{}".format(f, r))
+    raise ValueError()
 
     try:
         pc = pitch.Pitch(an)
@@ -1442,6 +1475,7 @@ def _music_extract(data_path, pickle_path, ext=".xml",
                    upper_voice_limit=None,
                    equal_voice_count=4,
                    parse_timeout=30,
+                   multiprocess_count=4,
                    verbose=False):
 
     if not os.path.exists(pickle_path):
@@ -1466,16 +1500,23 @@ def _music_extract(data_path, pickle_path, ext=".xml",
 
         #import pretty_midi
         logger.info("Processing {} files".format(len(files)))
-        from multiprocessing import Pool
-        import functools
-        pool = Pool(4)
-        ex = functools.partial(_single_extract_music21,
-                               files, data_path,
-                               skip_chords, verbose)
-        abortable_ex = functools.partial(abortable_worker, ex, timeout=parse_timeout)
-        result = pool.map(abortable_ex, range(len(files)))
-        pool.close()
-        pool.join()
+        if multiprocess_count is not None:
+            from multiprocessing import Pool
+            import functools
+            pool = Pool(4)
+            ex = functools.partial(_single_extract_music21,
+                                   files, data_path,
+                                   skip_chords, verbose)
+            abortable_ex = functools.partial(abortable_worker, ex, timeout=parse_timeout)
+            result = pool.map(abortable_ex, range(len(files)))
+            pool.close()
+            pool.join()
+        else:
+            result = []
+            for n in range(len(files)):
+                r = _single_extract_music21(files, data_path, skip_chords,
+                                            verbose, n)
+                result.append(r)
 
         for r in result:
             if r[0] != "null":
@@ -1863,7 +1904,8 @@ def fetch_bach_chorales_music21(keys=["C major", "A minor"],
     data_path = check_fetch_bach_chorales_music21()
     pickle_path = os.path.join(data_path, "__processed_bach.pkl")
     mu = _music_extract(data_path, pickle_path, ext=".mxl",
-                        skip_chords=False, equal_voice_count=4, verbose=verbose)
+                        skip_chords=False, equal_voice_count=4,
+                        multiprocess_count=None, verbose=verbose)
 
     lp = mu["list_of_data_pitch"]
     ld = mu["list_of_data_duration"]
