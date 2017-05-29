@@ -1288,31 +1288,24 @@ def music21_to_pitch_duration(p):
     total_set = set()
     for pi in range(len(parts)):
         total_set = total_set | set(list(cumulative_times[pi]))
-    total_set = sorted(list(set(total_set)))
-    to_fill = np.zeros((len(p.parts), maxlen)).astype("int32") - 1
+    total_set = np.array(sorted(list(set(total_set))))
+    # -1 for no-op?
+    to_fill_pitch = np.zeros((len(p.parts), len(total_set))) - 1
+    to_fill_dur = np.zeros((len(p.parts), len(total_set))) - 1
+    for pi in range(len(p.parts)):
+        for nts, ts in enumerate(total_set):
+            match_ctime = np.where(cumulative_times[pi] == ts)[0]
+            ppi = parts[pi][match_ctime]
+            pti = parts_times[pi][match_ctime]
+            if len(ppi) == 1:
+                to_fill_pitch[pi, nts] = float(ppi)
+                to_fill_dur[pi, nts] = float(pti)
+            elif len(ppi) == 0:
+                pass
+            else:
+                raise ValueError("Unexpected multi-match error")
+    return to_fill_pitch, to_fill_dur
 
-    from IPython import embed; embed(); raise ValueError()
-    # Create a "block" of events and times
-    event_points = sorted(list(set(sum(cumulative_times, []))))
-    maxlen = max(map(len, cumulative_times))
-    # -1 marks invalid / unused
-    part_block = np.zeros((len(p.parts), maxlen)).astype("int32") - 1
-    ctime_block = np.zeros((len(p.parts), maxlen)).astype("float32") - 1
-    time_block = np.zeros((len(p.parts), maxlen)).astype("float32") - 1
-    # create numpy array for easier indexing
-    for i in range(len(parts)):
-        part_block[i, :len(parts[i])] = parts[i]
-        ctime_block[i, :len(cumulative_times[i])] = cumulative_times[i]
-        time_block[i, :len(parts_times[i])] = parts_times[i]
-
-    event_block = np.zeros((len(p.parts), len(event_points))) - 1
-    etime_block = np.zeros((len(p.parts), len(event_points))) - 1
-    for i, e in enumerate(event_points):
-        idx = zip(*np.where(ctime_block == e))
-        for ix in idx:
-            event_block[ix[0], i] = part_block[ix[0], ix[1]]
-            etime_block[ix[0], i] = time_block[ix[0], ix[1]]
-    return event_block, etime_block
 
 # http://stackoverflow.com/questions/2281850/timeout-function-if-it-takes-too-long-to-finish
 # only works on Unix platforms though
@@ -1364,27 +1357,6 @@ def _single_extract_music21(files, data_path, skip_chords, verbose, n):
 
     # none if there is no data aug
     an = "C" if "major" in k.name else "A"
-
-    pc = pitch.Pitch(an)
-    i = interval.Interval(k.tonic, pc)
-    p = p.transpose(i)
-    k = p.analyze("key")
-    transpose_time = time.time()
-    if verbose:
-        r = transpose_time - start_time
-        logger.info("Transpose time {}:{}".format(f, r))
-
-    if skip_chords:
-        chords = ["null"]
-        chord_durations = ["null"]
-    else:
-        chords, chord_durations = music21_to_chord_duration(p)
-    pitches, durations = music21_to_pitch_duration(p)
-    pitch_duration_time = time.time()
-    if verbose:
-        r = pitch_duration_time - start_time
-        logger.info("music21 to pitch_duration time {}:{}".format(f, r))
-    raise ValueError()
 
     try:
         pc = pitch.Pitch(an)
@@ -1905,7 +1877,7 @@ def fetch_bach_chorales_music21(keys=["C major", "A minor"],
     pickle_path = os.path.join(data_path, "__processed_bach.pkl")
     mu = _music_extract(data_path, pickle_path, ext=".mxl",
                         skip_chords=False, equal_voice_count=4,
-                        multiprocess_count=None, verbose=verbose)
+                        verbose=verbose)
 
     lp = mu["list_of_data_pitch"]
     ld = mu["list_of_data_duration"]
