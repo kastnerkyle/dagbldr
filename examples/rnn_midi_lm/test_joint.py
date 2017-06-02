@@ -1,5 +1,9 @@
 #!/usr/bin/env python
 import numpy as np
+from scipy.cluster.vq import vq
+import os
+import cPickle as pickle
+import copy
 
 from dagbldr.datasets import pitches_and_durations_to_pretty_midi
 from dagbldr.datasets import list_of_array_iterator
@@ -12,10 +16,6 @@ from dagbldr.datasets import fetch_lakh_midi_music21
 
 from dagbldr.utils import minibatch_kmedians, beamsearch
 
-import os
-import cPickle as pickle
-import copy
-
 #mu = fetch_lakh_midi_music21(subset="pop")
 mu = fetch_bach_chorales_music21()
 #mu = fetch_haralick_midi_music21(subset="mozart_piano")
@@ -25,13 +25,6 @@ mu = fetch_bach_chorales_music21()
 #n_epochs = 500
 #n_epochs = 2350
 #n_epochs = 3000
-minibatch_size = 10
-n_iter = 0
-
-pitch_clusters = 9133
-dur_clusters = 9133
-from_scratch = False
-
 pitch_oh_size = len(mu["pitch_list"])
 dur_oh_size = len(mu["duration_list"])
 
@@ -45,14 +38,55 @@ lp = mu["list_of_data_pitch"]
 ld = mu["list_of_data_duration"]
 lql = mu["list_of_data_quarter_length"]
 
+pitch_clusters = 8192
+dur_clusters = 2048
+minibatch_size = 10
+n_iter = 0
+voice_type = "legend"
+#key = None
+subset = None
+key = None
+#subset = 100
+train_cache = True
+from_scratch = False
+joint_order = 3
+ext = joint_order * joint_order + joint_order - 1
+
+remove_files = ["samples/samples/" + fi for fi in os.listdir("samples/samples") if fi.endswith(".mid")]
+for rf in remove_files:
+    print("Removing pre-existing file {}".format(rf))
+    os.remove(rf)
+
+# prune to only major/minor
+if key != None:
+    keep_lp = []
+    keep_ld = []
+    keep_lql = []
+    lk = mu["list_of_data_key"]
+    for n in range(len(lp)):
+        if subset != None and len(keep_lp) > subset:
+            break
+
+        if key in lk[n]:
+            keep_lp.append(lp[n])
+            keep_ld.append(ld[n])
+            keep_lql.append(lql[n])
+    lp = copy.deepcopy(keep_lp)
+    ld = copy.deepcopy(keep_ld)
+    lql = copy.deepcopy(keep_lql)
+
+
+# 100 potential seeds, reused from train...
+si = max((0., 1. - 100. / len(lp)))
+
 train_itr = list_of_array_iterator([lp, ld], minibatch_size,
                                    list_of_extra_info=[lql],
-                                   stop_index=.9,
+                                   #stop_index=si,
                                    randomize=True, random_state=random_state)
 
 valid_itr = list_of_array_iterator([lp, ld], minibatch_size,
                                    list_of_extra_info=[lql],
-                                   start_index=.9,
+                                   start_index=si,
                                    randomize=True, random_state=random_state)
 
 r = next(train_itr)
@@ -61,23 +95,31 @@ train_itr.reset()
 
 
 def oh_3d(a, oh_size):
-    return (np.arange(oh_size) == a[:, :, None] - 1).astype(int)
+    return (np.arange(oh_size + 1) == a[:, :, None]).astype(int)
 
 
 def get_codebook(list_of_arr, n_components, n_iter, oh_size):
+    # make eos symbol all 0s
+    eos = 0 * list_of_arr[0][-1][None]
+    list_of_arr = [np.concatenate((la, eos), axis=0) for la in list_of_arr]
     j = np.vstack(list_of_arr)
     oh_j = oh_3d(j, oh_size=oh_size)
     shp = oh_j.shape
     oh_j2 = oh_j.reshape(-1, shp[1] * shp[2])
+    oh_eos = oh_3d(eos, oh_size=oh_size)
+    oh_eos2 = oh_eos.reshape(-1, shp[1] * shp[2])
 
     codebook = minibatch_kmedians(oh_j2, n_components=n_components,
                                   n_iter=n_iter,
+                                  init_values=oh_eos2,
                                   random_state=random_state, verbose=True)
     return codebook
 
 
 def quantize(list_of_arr, codebook, oh_size):
-    from scipy.cluster.vq import vq
+    # make eos symbol all 0s
+    eos = 0 * list_of_arr[0][-1][None]
+    list_of_arr = [np.concatenate((la, eos), axis=0) for la in list_of_arr]
     quantized_arr = []
     list_of_codes = []
     for arr in list_of_arr:
@@ -187,6 +229,8 @@ ld = fixup_dur_list(ld)
 lp = fixup_pitch_list(lp)
 
 if from_scratch or not os.path.exists("dur_codebook.npy"):
+    if subset != None or key != None:
+        raise ValueError("subset and key should be None when building the codebooks!")
     dur_codebook = get_codebook(ld, n_components=dur_clusters, n_iter=n_iter, oh_size=dur_oh_size)
     np.save("dur_codebook.npy", dur_codebook)
 else:
@@ -194,6 +238,8 @@ else:
 
 
 if from_scratch or not os.path.exists("pitch_codebook.npy"):
+    if subset != None or key != None:
+        raise ValueError("subset and key should be None when building the codebooks!")
     pitch_codebook = get_codebook(lp, n_components=pitch_clusters, n_iter=n_iter, oh_size=pitch_oh_size)
     np.save("pitch_codebook.npy", pitch_codebook)
 else:
@@ -217,6 +263,7 @@ def pre_d(dmb, quantize_it=True):
 
     q_list_of_dur = [qld[:, None, :] for qld in q_list_of_dur]
     q_list_of_dur_codes = [qldc[:, None, None] for qldc in q_list_of_dur_codes]
+
     q_dur_mb = np.concatenate(q_list_of_dur, axis=1)
     q_code_mb = np.concatenate(q_list_of_dur_codes, axis=1).astype("float32")
     return q_dur_mb, q_code_mb
@@ -279,23 +326,29 @@ def normalize(counter_dict):
     return counter_dict
 
 
-joint_order = 3
-p_total_frequency = {}
-d_total_frequency = {}
+if train_cache:
+    print("Using train cache...")
+    p_total_frequency = np.load("pitch_cache.npy").item()
+    d_total_frequency = np.load("dur_cache.npy").item()
+else:
+    p_total_frequency = {}
+    d_total_frequency = {}
 
-for r in train_itr:
-    pitch_mb, pitch_mask, dur_mb, dur_mask = r[:4]
-    q_pitch_mb, q_pitch_code_mb = pre_p(pitch_mb)
-    q_dur_mb, q_dur_code_mb = pre_d(dur_mb)
-    p_frequency = copy.deepcopy(p_total_frequency)
-    d_frequency = copy.deepcopy(d_total_frequency)
-    p_frequency = accumulate(q_pitch_code_mb, p_frequency, joint_order)
-    d_frequency = accumulate(q_dur_code_mb, d_frequency, joint_order)
-    p_total_frequency.update(p_frequency)
-    d_total_frequency.update(d_frequency)
+    for r in train_itr:
+        pitch_mb, pitch_mask, dur_mb, dur_mask = r[:4]
+        q_pitch_mb, q_pitch_code_mb = pre_p(pitch_mb)
+        q_dur_mb, q_dur_code_mb = pre_d(dur_mb)
+        p_frequency = copy.deepcopy(p_total_frequency)
+        d_frequency = copy.deepcopy(d_total_frequency)
+        p_frequency = accumulate(q_pitch_code_mb, p_frequency, joint_order)
+        d_frequency = accumulate(q_dur_code_mb, d_frequency, joint_order)
+        p_total_frequency.update(p_frequency)
+        d_total_frequency.update(d_frequency)
 
-p_total_frequency = normalize(p_total_frequency)
-d_total_frequency = normalize(d_total_frequency)
+    p_total_frequency = normalize(p_total_frequency)
+    d_total_frequency = normalize(d_total_frequency)
+    np.save("pitch_cache.npy", p_total_frequency)
+    np.save("dur_cache.npy", d_total_frequency)
 
 
 def rolloff_lookup(lookup_dict, lookup_key):
@@ -304,21 +357,18 @@ def rolloff_lookup(lookup_dict, lookup_key):
     ld = lookup_dict
     try:
         dist_lookup = lookup_dict[lk]
+        return dist_lookup
     except KeyError:
-        for oi in range(1, len(lookup_key)):
-            if oi == (len(lookup_key) - 1):
-               # choose one of the elements of the lookup...
-               sub_keys = sorted(list(set(lookup_key)))
-               dist_lookup = {sk: 1. / len(sub_keys) for sk in sub_keys}
-               break
-            else:
-                sub_keys = [ki for ki in lookup_dict.keys() if lk[oi:] == ki[oi:]]
-                if len(sub_keys) > 0:
-                   random_state.shuffle(sub_keys)
-                   dist_lookup = lookup_dict[sub_keys[0]]
-                   break
+        for oi in range(1, len(lookup_key) - 1):
+            sub_keys = [ki for ki in lookup_dict.keys() if lk[oi:] == ki[oi:]]
+            if len(sub_keys) > 0:
+               random_state.shuffle(sub_keys)
+               dist_lookup = lookup_dict[sub_keys[0]]
+               return dist_lookup
+    # failover case
+    sub_keys = sorted(list(set(lookup_key)))
+    dist_lookup = {sk: 1. / len(sub_keys) for sk in sub_keys}
     return dist_lookup
-
 
 def prob_func(prefix):
     history = prefix[-joint_order:]
@@ -336,18 +386,19 @@ def prob_func(prefix):
     return dist
 
 
+
 i = 0
 for a in valid_itr:
     pitch_mb, pitch_mask, dur_mb, dur_mask = a[:4]
     pitch_mb, _ = pre_p(pitch_mb, quantize_it=False)
     dur_mb, _ = pre_d(dur_mb, quantize_it=False)
-    pitch_mb = pitch_mb[joint_order:]
-    dur_mb = dur_mb[joint_order:]
+    pitch_mb = pitch_mb[ext:]
+    dur_mb = dur_mb[ext:]
     pitches_and_durations_to_pretty_midi(pitch_mb, dur_mb,
                                          save_dir="samples/samples",
                                          name_tag="test_sample_{}.mid",
                                          #list_of_quarter_length=[int(.5 * qpm) for qpm in qpms],
-                                         voice_params="woodwinds",
+                                         voice_params=voice_type,
                                          add_to_name=i * pitch_mb.shape[1])
     i += 1
 valid_itr.reset()
@@ -357,14 +408,13 @@ for a in valid_itr:
     pitch_mb, pitch_mask, dur_mb, dur_mask = a[:4]
     pitch_mb, _ = pre_p(pitch_mb, quantize_it=True)
     dur_mb, _ = pre_d(dur_mb, quantize_it=True)
-    pitch_mb = pitch_mb[joint_order:]
-    dur_mb = dur_mb[joint_order:]
-
+    pitch_mb = pitch_mb[ext:]
+    dur_mb = dur_mb[ext:]
     pitches_and_durations_to_pretty_midi(pitch_mb, dur_mb,
                                          save_dir="samples/samples",
                                          name_tag="test_quantized_sample_{}.mid",
                                          #list_of_quarter_length=[int(.5 * qpm) for qpm in qpms],
-                                         voice_params="woodwinds",
+                                         voice_params=voice_type,
                                          add_to_name=i * pitch_mb.shape[1])
     i += 1
 valid_itr.reset()
@@ -372,37 +422,56 @@ valid_itr.reset()
 
 i = 0
 for a in valid_itr:
+    print("Beginning minibatch {}".format(i))
     n_pitch_mb, n_pitch_mask, n_dur_mb, n_dur_mask = a[:4]
+
     q_pitch_mb, q_pitch_code_mb = pre_p(n_pitch_mb)
+    o_q_pitch_mb = q_pitch_mb
+
     q_dur_mb, q_dur_code_mb = pre_d(n_dur_mb)
+    o_q_dur_mb = q_dur_mb
+
     qpms = r[-1]
 
     final_pitches = []
     final_durs = []
+
+    failed = []
     for mbi in range(minibatch_size):
         start_pitch_token = [int(qp) for qp in list(q_pitch_code_mb[:joint_order, mbi, 0])]
         start_dur_token = [int(dp) for dp in list(q_dur_code_mb[:joint_order, mbi, 0])]
         start_token = [tuple([qp, dp]) for qp, dp in zip(start_pitch_token, start_dur_token)]
-        end_token = [(start_token[0][0], None)]
+        # eos
+        end_token = [(0, None)]
         stochastic = True
         beam_width = 10
-        clip = 75
+        clip = 60
+        timeout = 60
+        verbose = True
         random_state = np.random.RandomState(90210)
         b = beamsearch(prob_func, beam_width,
                        start_token=start_token,
                        end_token=end_token,
                        clip_len=clip,
                        stochastic=stochastic,
-                       random_state=random_state)
+                       random_state=random_state,
+                       verbose=verbose,
+                       beam_timeout=timeout)
 
-        # for all beams, take the sequence (p[0]) and the respective type (ip[0] for pitch, ip[1] for dur)
-        # last number (4) for reconstruction to actual data (4 voices)
-        quantized_pitch_seqs = codebook_lookup([np.array([ip[0] for ip in p[0]]).astype("int32") for p in b], pitch_codebook, 4)
-        quantized_dur_seqs = codebook_lookup([np.array([ip[1] for ip in p[0]]).astype("int32") for p in b], dur_codebook, 4)
+        if len(b) > 0:
+            # for all beams, take the sequence (p[0]) and the respective type (ip[0] for pitch, ip[1] for dur)
+            # last number (4) for reconstruction to actual data (4 voices)
+            quantized_pitch_seqs = codebook_lookup([np.array([ip[0] for ip in p[0]]).astype("int32") for p in b], pitch_codebook, 4)
+            quantized_dur_seqs = codebook_lookup([np.array([ip[1] for ip in p[0]]).astype("int32") for p in b], dur_codebook, 4)
 
-        # take top beams
-        final_pitches.append(quantized_pitch_seqs[0])
-        final_durs.append(quantized_dur_seqs[0])
+            # take top beams
+            final_pitches.append(quantized_pitch_seqs[0])
+            final_durs.append(quantized_dur_seqs[0])
+        else:
+            failed.append(i * q_pitch_mb.shape[1] + mbi)
+            print("Sequence {} failed beamsearch timeout".format(mbi))
+            final_pitches.append(q_pitch_mb[:joint_order + 1, mbi])
+            final_durs.append(q_dur_mb[:joint_order + 1, mbi])
 
     # make into a minibatch
     pad_size = max([len(fp) for fp in final_pitches])
@@ -427,7 +496,6 @@ for a in valid_itr:
     pl = mu['pitch_list']
     dl = mu['duration_list']
 
-
     for n, pli in enumerate(pl):
         pitch_where.append(np.where(q_pitch_mb == n))
 
@@ -440,14 +508,46 @@ for a in valid_itr:
     for n, dw in enumerate(duration_where):
         q_dur_mb[dw] = dl[n]
 
-
     # ext in order to avoid influence of "priming"
-    q_pitch_mb = q_pitch_mb[joint_order:]
-    q_dur_mb = q_dur_mb[joint_order:]
+    q_pitch_mb = q_pitch_mb[ext:]
+    q_dur_mb = q_dur_mb[ext:]
+
+    o_q_pitch_mb = o_q_pitch_mb[ext:]
+    o_q_dur_mb = o_q_dur_mb[ext:]
+
+    final_q_pitch_mb = 0. * q_pitch_mb
+    final_q_dur_mb = 0. * q_dur_mb
+    leadin = 2 * joint_order
+
+    for mi in range(q_pitch_mb.shape[1]):
+        sz = np.prod(q_pitch_mb[:leadin, mi].shape)
+        matches = (o_q_pitch_mb[:leadin, mi] == q_pitch_mb[:leadin, mi]).sum()
+        if matches < (sz // 2):
+            final_q_pitch_mb[:, mi] = q_pitch_mb[:, mi]
+            final_q_dur_mb[:, mi] = q_dur_mb[:, mi]
+        else:
+            failed.append(i * q_pitch_mb.shape[1] + mi)
+            print("Sequence {} failed copycat check".format(mi))
+
+    q_pitch_mb = final_q_pitch_mb
+    q_dur_mb = final_q_dur_mb
+
     pitches_and_durations_to_pretty_midi(q_pitch_mb, q_dur_mb,
                                          save_dir="samples/samples",
                                          name_tag="test_markov_sample_{}.mid",
-                                         #list_of_quarter_length=qpms,
-                                         voice_params="woodwinds",
+    #                                    list_of_quarter_length=qpms,
+                                         voice_params=voice_type,
                                          add_to_name=i * q_pitch_mb.shape[1])
+    # delete all failures here
+    all_files = [fi for fi in os.listdir("samples/samples") if fi.endswith(".mid")]
+    remove_files = []
+    for failed_i in failed:
+        to_remove = ["samples/samples/" + fi for fi in all_files if "sample_{}.mid".format(failed_i) in fi]
+        remove_files.extend(to_remove)
+
+    remove_files = sorted(list(set(remove_files)))
+    for rf in remove_files:
+        print("Removing copycat {}".format(rf))
+        os.remove(rf)
+
     i += 1

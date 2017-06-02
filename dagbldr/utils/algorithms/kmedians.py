@@ -10,7 +10,9 @@ from scipy.cluster.vq import vq
 
 def minibatch_kmedians(X, M=None, n_components=10, n_iter=100,
                        minibatch_size=100, random_state=None,
-                       init_type="exhaustive_data", shuffle_minibatches=True,
+                       init_type="exhaustive_data",
+                       init_values=None,
+                       shuffle_minibatches=True,
                        verbose=False):
     """
     Example usage:
@@ -38,10 +40,14 @@ def minibatch_kmedians(X, M=None, n_components=10, n_iter=100,
             ind = np.arange(len(X)).astype('int32')
             random_state.shuffle(ind)
             M = X[ind[:n_clusters]]
+            if init_values != None:
+                M[:len(init_values)] = init_values
         elif init_type == "exhaustive_data":
             ind = np.arange(len(X)).astype('int32')
             random_state.shuffle(ind)
             M = X[ind[:n_clusters]]
+            if init_values != None:
+                M[:len(init_values)] = init_values
             clean = False
             pass_itr = 0
             bail_at = 10

@@ -4,6 +4,40 @@
 import numpy as np
 import heapq
 import collections
+import multiprocessing
+from multiprocessing import Pool
+import functools
+import time
+from ...core import get_logger
+
+logger = get_logger()
+
+# http://stackoverflow.com/questions/2281850/timeout-function-if-it-takes-too-long-to-finish
+# only works on Unix platforms though
+class timeout:
+    def __init__(self, seconds=1, error_message='Timeout'):
+        self.seconds = seconds
+        self.error_message = error_message
+    def handle_timeout(self, signum, frame):
+        raise ValueError(self.error_message)
+    def __enter__(self):
+        signal.signal(signal.SIGALRM, self.handle_timeout)
+        signal.alarm(self.seconds)
+    def __exit__(self, type, value, traceback):
+        signal.alarm(0)
+
+
+# http://stackoverflow.com/questions/29494001/how-can-i-abort-a-task-in-a-multiprocessing-pool-after-a-timeout
+def abortable_worker(func, *args, **kwargs):
+    # returns ("null",) if timeout
+    timeout = kwargs.get('timeout', None)
+    p = multiprocessing.dummy.Pool(1)
+    res = p.apply_async(func, args=args)
+    try:
+        out = res.get(timeout)  # Wait timeout seconds for func to complete.
+        return out
+    except multiprocessing.TimeoutError:
+        return ("null",)
 
 
 class Beam(object):
@@ -59,7 +93,7 @@ def _beamsearch(probabilities_function, beam_width=10, clip_len=-1,
                 start_token="<START>", end_token="<EOS>", use_log=True,
                 renormalize=True, length_score=True,
                 stochastic=False, temperature=1.0,
-                random_state=None, eps=1E-9):
+                random_state=None, eps=1E-9, verbose=False):
     """
     THIS IS THE CORE ALGORITHM - WRAPPED SO THAT IT RETURNS ON SCORE, RATHER THAN LENGTH (AS IN YIELD/GENERATOR)
     From http://geekyisawesome.blogspot.ca/2017/04/getting-top-n-most-probable-sentences.html
@@ -149,6 +183,7 @@ def _beamsearch(probabilities_function, beam_width=10, clip_len=-1,
         prev_beam.add(1.0, False, 1.0, start_token)
 
 
+    full_outputs = []
     while True:
         curr_beam = Beam(beam_width - completed_beams, None, use_log, stochastic,
                          temperature, random_state)
@@ -223,11 +258,13 @@ def _beamsearch(probabilities_function, beam_width=10, clip_len=-1,
                 # If most probable prefix is a complete sentence or has a length that
                 # exceeds the clip length (ignoring the start token) then return it
                 # yield best without start token, along with probability
-                yield (best_prefix, best_score, best_prob)
+                full_outputs.append((best_prefix, best_score, best_prob))
                 sorted_beam.pop()
                 completed_beams += 1
+                if verbose:
+                    logger.info("Completed beams {} of {}".format(completed_beams, beam_width))
                 any_removals = True
-                # If there are no more sentences in the beam then stop checking
+                # if there are no more sentences in the beam then stop checking
                 if len(sorted_beam) == 0:
                     break
             else:
@@ -235,7 +272,8 @@ def _beamsearch(probabilities_function, beam_width=10, clip_len=-1,
 
         if any_removals == True:
             if len(sorted_beam) == 0:
-                break
+                return full_outputs
+                #break
             else:
                 prev_beam = Beam(beam_width - completed_beams, sorted_beam, use_log,
                                  stochastic, temperature, random_state)
@@ -243,12 +281,29 @@ def _beamsearch(probabilities_function, beam_width=10, clip_len=-1,
             prev_beam = curr_beam
 
 
+def _run_beamsearch(probabilities_function, beam_width, clip_len,
+                    start_token, end_token, use_log,
+                    renormalize, length_score, stochastic, temperature,
+                    random_state, eps, verbose, n):
+    # n unused, just for pool usage
+    b = _beamsearch(probabilities_function, beam_width=beam_width,
+                    clip_len=clip_len, start_token=start_token,
+                    end_token=end_token, use_log=use_log,
+                    renormalize=renormalize, length_score=length_score,
+                    stochastic=stochastic, temperature=temperature,
+                    random_state=random_state, eps=eps, verbose=verbose)
+    return b
+
+
 def beamsearch(probabilities_function, beam_width=10, clip_len=-1,
                start_token="<START>", end_token="<EOS>", use_log=True,
                renormalize=True, length_score=True,
                stochastic=False, temperature=1.0,
-               random_state=None, eps=1E-9):
+               random_state=None, eps=1E-9, verbose=False,
+               beam_timeout=None):
     """
+    If timeout is reached, returns an empty list (return current beams instead?)
+
     From http://geekyisawesome.blogspot.ca/2017/04/getting-top-n-most-probable-sentences.html
 
     returns a list of tuples (seqeunce, score, prob) in order from best score to worst
@@ -279,17 +334,46 @@ def beamsearch(probabilities_function, beam_width=10, clip_len=-1,
     stochastic beamsearch in order to control randomness
 
     "eps" minimum probability for log-space calculations, to avoid numerical issues
+
+    "verbose" to see timing of beamsearch
+
+    "beam_timeout" None or float time in seconds to wait for beam completion
+    """
+    start_time = time.time()
+
+    # may need a way to run for debugging...
     """
     b = _beamsearch(probabilities_function, beam_width=beam_width,
                     clip_len=clip_len, start_token=start_token,
                     end_token=end_token, use_log=use_log,
                     renormalize=renormalize, length_score=length_score,
                     stochastic=stochastic, temperature=temperature,
-                    random_state=random_state, eps=eps)
-    all_results = []
-    # get all beams
-    for result in b:
-        all_results.append(result)
+                    random_state=random_state, eps=eps, verbose=verbose)
+    """
+    pool = Pool(1)
+    # don't do verbose inner loop
+    ex = functools.partial(_run_beamsearch, probabilities_function, beam_width,
+                           clip_len, start_token, end_token, use_log,
+                           renormalize, length_score, stochastic, temperature,
+                           random_state, eps, False)
+    if beam_timeout == None:
+        beam_timeout = 10000000000000000000
+    abortable_ex = functools.partial(abortable_worker, ex, timeout=beam_timeout)
+    # only 1 job
+    all_results = pool.map(abortable_ex, [1])
+    pool.close()
+    pool.join()
+    all_results = all_results[0]
+    end_time = time.time()
+
+    # beamsearch was killed due to time
+    if all_results[0] == "null":
+        if verbose:
+            logger.info("Beamsearch timed out, total time {}".format(end_time - start_time))
+        return []
+
     # sort by score, top down
-    all_results  = sorted(all_results, key=lambda x: x[1], reverse=True)
+    all_results = sorted(all_results, key=lambda x: x[1], reverse=True)
+    if verbose:
+        logger.info("Beamsearch complete, total time {}".format(end_time - start_time))
     return all_results
