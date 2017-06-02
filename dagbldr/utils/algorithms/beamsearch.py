@@ -65,15 +65,16 @@ class Beam(object):
         heapq.heappush(self.heap, (score, complete, prob, prefix))
         while len(self.heap) > self.beam_width:
             if self.stochastic:
+                # use score instead...
                 # same whether logspace or no?
-                probs = np.array([h[2] for h in self.heap])
+                probs = np.array([h[0] for h in self.heap])
                 probs = probs / self.temperature
                 e_x = np.exp(probs - np.max(probs))
                 s_x = e_x / e_x.sum()
                 is_x = 1. - s_x
                 is_x = is_x / is_x.sum()
                 to_remove = self.random_state.multinomial(1, is_x).argmax()
-                completed = [n for n, h in enumerate(self.heap) if h[2] == True]
+                completed = [n for n, h in enumerate(self.heap) if h[1] == True]
                 # Don't remove completed sentences by randomness
                 if to_remove not in completed:
                     # there must be a faster way...

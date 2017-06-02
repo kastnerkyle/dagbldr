@@ -42,7 +42,7 @@ pitch_clusters = 8192
 dur_clusters = 2048
 minibatch_size = 10
 n_iter = 0
-voice_type = "legend"
+voice_type = "harpsichord"
 #key = None
 subset = None
 key = None
@@ -370,6 +370,7 @@ def rolloff_lookup(lookup_dict, lookup_key):
     dist_lookup = {sk: 1. / len(sub_keys) for sk in sub_keys}
     return dist_lookup
 
+
 def prob_func(prefix):
     history = prefix[-joint_order:]
     pitch_history = [h[0] for h in history]
@@ -445,8 +446,8 @@ for a in valid_itr:
         end_token = [(0, None)]
         stochastic = True
         beam_width = 10
-        clip = 60
-        timeout = 60
+        clip = 30
+        timeout = 30
         verbose = True
         random_state = np.random.RandomState(90210)
         b = beamsearch(prob_func, beam_width,
