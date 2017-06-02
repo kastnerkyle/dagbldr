@@ -445,9 +445,9 @@ for a in valid_itr:
         # eos
         end_token = [(0, None)]
         stochastic = True
-        beam_width = 10
-        clip = 30
-        timeout = 30
+        beam_width = 100
+        clip = 60
+        timeout = 60
         verbose = True
         random_state = np.random.RandomState(90210)
         b = beamsearch(prob_func, beam_width,

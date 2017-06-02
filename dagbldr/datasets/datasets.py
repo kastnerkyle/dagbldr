@@ -2131,13 +2131,13 @@ def pitches_and_durations_to_pretty_midi(pitches, durations,
                                          add_to_name=0,
                                          lower_pitch_limit=12,
                                          list_of_quarter_length=None,
+                                         default_quarter_length=47,
                                          voice_params="woodwinds"):
     """
     durations assumed to be scaled to quarter lengths e.g. 1 is 1 quarter note
     2 is a half note, etc
     """
 
-    default_quarter_length = 40
     import pretty_midi
     # BTAS mapping
     def weird():
