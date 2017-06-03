@@ -61,8 +61,8 @@ class Beam(object):
         self.use_log = use_log
         self.beam_width = beam_width
 
-    def add(self, score, complete, prob, prefix):
-        heapq.heappush(self.heap, (score, complete, prob, prefix))
+    def add(self, complete, score, prob, prefix):
+        heapq.heappush(self.heap, (complete, score, prob, prefix))
         while len(self.heap) > self.beam_width:
             if self.stochastic:
                 # use score instead...
@@ -199,9 +199,9 @@ def _beamsearch(probabilities_function, beam_width=10, clip_len=-1,
                 min_prob = 1.
 
         # Add complete sentences that do not yet have the best probability to the current beam, the rest prepare to add more words to them.
-        for (prefix_score, complete, prefix_prob, prefix) in prev_beam:
+        for (complete, prefix_score, prefix_prob, prefix) in prev_beam:
             if complete == True:
-                curr_beam.add(prefix_score, True, prefix_prob, prefix)
+                curr_beam.add(True, prefix_score, prefix_prob, prefix)
             else:
                 # Get probability of each possible next word for the incomplete prefix
                 for (next_prob, next_word) in probabilities_function(prefix):

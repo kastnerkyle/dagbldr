@@ -444,8 +444,8 @@ for a in valid_itr:
         start_token = [tuple([qp, dp]) for qp, dp in zip(start_pitch_token, start_dur_token)]
         # eos
         end_token = [(0, None)]
-        stochastic = True
-        beam_width = 100
+        stochastic = False
+        beam_width = 1
         clip = 60
         timeout = 60
         verbose = True
