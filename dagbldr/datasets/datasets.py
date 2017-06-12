@@ -1288,31 +1288,24 @@ def music21_to_pitch_duration(p):
     total_set = set()
     for pi in range(len(parts)):
         total_set = total_set | set(list(cumulative_times[pi]))
-    total_set = sorted(list(set(total_set)))
-    to_fill = np.zeros((len(p.parts), maxlen)).astype("int32") - 1
+    total_set = np.array(sorted(list(set(total_set))))
+    # -1 for no-op?
+    to_fill_pitch = np.zeros((len(p.parts), len(total_set))) - 1
+    to_fill_dur = np.zeros((len(p.parts), len(total_set))) - 1
+    for pi in range(len(p.parts)):
+        for nts, ts in enumerate(total_set):
+            match_ctime = np.where(cumulative_times[pi] == ts)[0]
+            ppi = parts[pi][match_ctime]
+            pti = parts_times[pi][match_ctime]
+            if len(ppi) == 1:
+                to_fill_pitch[pi, nts] = float(ppi)
+                to_fill_dur[pi, nts] = float(pti)
+            elif len(ppi) == 0:
+                pass
+            else:
+                raise ValueError("Unexpected multi-match error")
+    return to_fill_pitch, to_fill_dur
 
-    from IPython import embed; embed(); raise ValueError()
-    # Create a "block" of events and times
-    event_points = sorted(list(set(sum(cumulative_times, []))))
-    maxlen = max(map(len, cumulative_times))
-    # -1 marks invalid / unused
-    part_block = np.zeros((len(p.parts), maxlen)).astype("int32") - 1
-    ctime_block = np.zeros((len(p.parts), maxlen)).astype("float32") - 1
-    time_block = np.zeros((len(p.parts), maxlen)).astype("float32") - 1
-    # create numpy array for easier indexing
-    for i in range(len(parts)):
-        part_block[i, :len(parts[i])] = parts[i]
-        ctime_block[i, :len(cumulative_times[i])] = cumulative_times[i]
-        time_block[i, :len(parts_times[i])] = parts_times[i]
-
-    event_block = np.zeros((len(p.parts), len(event_points))) - 1
-    etime_block = np.zeros((len(p.parts), len(event_points))) - 1
-    for i, e in enumerate(event_points):
-        idx = zip(*np.where(ctime_block == e))
-        for ix in idx:
-            event_block[ix[0], i] = part_block[ix[0], ix[1]]
-            etime_block[ix[0], i] = time_block[ix[0], ix[1]]
-    return event_block, etime_block
 
 # http://stackoverflow.com/questions/2281850/timeout-function-if-it-takes-too-long-to-finish
 # only works on Unix platforms though
@@ -1364,27 +1357,6 @@ def _single_extract_music21(files, data_path, skip_chords, verbose, n):
 
     # none if there is no data aug
     an = "C" if "major" in k.name else "A"
-
-    pc = pitch.Pitch(an)
-    i = interval.Interval(k.tonic, pc)
-    p = p.transpose(i)
-    k = p.analyze("key")
-    transpose_time = time.time()
-    if verbose:
-        r = transpose_time - start_time
-        logger.info("Transpose time {}:{}".format(f, r))
-
-    if skip_chords:
-        chords = ["null"]
-        chord_durations = ["null"]
-    else:
-        chords, chord_durations = music21_to_chord_duration(p)
-    pitches, durations = music21_to_pitch_duration(p)
-    pitch_duration_time = time.time()
-    if verbose:
-        r = pitch_duration_time - start_time
-        logger.info("music21 to pitch_duration time {}:{}".format(f, r))
-    raise ValueError()
 
     try:
         pc = pitch.Pitch(an)
@@ -1474,7 +1446,7 @@ def _music_extract(data_path, pickle_path, ext=".xml",
                    lower_voice_limit=None,
                    upper_voice_limit=None,
                    equal_voice_count=4,
-                   parse_timeout=30,
+                   parse_timeout=100,
                    multiprocess_count=4,
                    verbose=False):
 
@@ -1518,7 +1490,7 @@ def _music_extract(data_path, pickle_path, ext=".xml",
                                             verbose, n)
                 result.append(r)
 
-        for r in result:
+        for n, r in enumerate(result):
             if r[0] != "null":
                 (pitches, durations,
                 key, fname, quarter_length,
@@ -1531,6 +1503,8 @@ def _music_extract(data_path, pickle_path, ext=".xml",
                 all_transposed_keys.append(key)
                 all_file_names.append(fname)
                 all_quarter_length.append(quarter_length)
+            else:
+                logger.info("Result {} timed out".format(n))
         gtime = time.time()
         if verbose:
             r = gtime - itime
@@ -1905,7 +1879,7 @@ def fetch_bach_chorales_music21(keys=["C major", "A minor"],
     pickle_path = os.path.join(data_path, "__processed_bach.pkl")
     mu = _music_extract(data_path, pickle_path, ext=".mxl",
                         skip_chords=False, equal_voice_count=4,
-                        multiprocess_count=None, verbose=verbose)
+                        verbose=verbose)
 
     lp = mu["list_of_data_pitch"]
     ld = mu["list_of_data_duration"]
@@ -2157,13 +2131,13 @@ def pitches_and_durations_to_pretty_midi(pitches, durations,
                                          add_to_name=0,
                                          lower_pitch_limit=12,
                                          list_of_quarter_length=None,
+                                         default_quarter_length=47,
                                          voice_params="woodwinds"):
     """
     durations assumed to be scaled to quarter lengths e.g. 1 is 1 quarter note
     2 is a half note, etc
     """
 
-    default_quarter_length = 40
     import pretty_midi
     # BTAS mapping
     def weird():
@@ -2185,24 +2159,24 @@ def pitches_and_durations_to_pretty_midi(pitches, durations,
     elif voice_params == "legend":
         # LoZ
         voice_mappings = ["Acoustic Guitar (nylon)"] * 3 + ["Pan Flute"]
-        voice_velocity = [20, 16, 30, 16]
-        voice_offset = [0, 0, 0, 0]
+        voice_velocity = [20, 16, 25, 10]
+        voice_offset = [0, 0, 0, 12]
         voice_decay = [1., 1., 1., .95]
     elif voice_params == "organ":
         voice_mappings = ["Church Organ"] * 4
         voice_velocity = [40, 30, 30, 60]
         voice_offset = [0, 0, 0, 0]
-        voice_decay = [1., 1., 1., 1.]
+        voice_decay = [.98, .98, .98, .98]
     elif voice_params == "piano":
         voice_mappings = ["Acoustic Grand Piano"] * 4
         voice_velocity = [40, 30, 30, 60]
         voice_offset = [0, 0, 0, 0]
-        voice_decay = [5., 5., 5., 5.]
+        voice_decay = [1., 1., 1., 1.]
     elif voice_params == "electric_piano":
         voice_mappings = ["Electric Piano 1"] * 4
         voice_velocity = [40, 30, 30, 60]
         voice_offset = [0, 0, 0, 0]
-        voice_decay = [5., 5., 5., 5.]
+        voice_decay = [1., 1., 1., 1.]
     elif voice_params == "harpsichord":
         voice_mappings = ["Harpsichord"] * 4
         voice_velocity = [40, 30, 30, 60]
@@ -2211,11 +2185,19 @@ def pitches_and_durations_to_pretty_midi(pitches, durations,
     elif voice_params == "woodwinds":
         voice_mappings = ["Bassoon", "Clarinet", "English Horn", "Oboe"]
         voice_velocity = [50, 30, 30, 40]
-        voice_offset = [-2, -2, -2, -2]
+        voice_offset = [0, 0, 0, 0]
         voice_decay = [1., 1., 1., 1.]
     else:
         # eventually add and define dictionary support here
         raise ValueError("Unknown voice mapping specified")
+
+    # normalize
+    mm = float(max(voice_velocity))
+    mi = float(min(voice_velocity))
+    dynamic_range = min(80, (mm - mi))
+    # keep same scale just make it louder?
+    voice_velocity = [int((80 - dynamic_range) + int(v - mi)) for v in voice_velocity]
+
     len_durations = len(durations)
     order = durations.shape[-1]
     voice_mappings = voice_mappings[-order:]

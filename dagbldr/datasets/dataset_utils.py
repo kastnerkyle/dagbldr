@@ -198,12 +198,12 @@ class list_of_array_iterator(base_iterator):
         self._idx = np.arange(len(list_of_containers[0]), dtype="int32")
         self._current_offset = 0
         self.random_state = random_state
+        # deterministic splitting to avoid training/testing issues...
+        self._idx = self._idx[self.start_index:self.stop_index]
 
         if self.randomize:
             assert self.random_state is not None
             self.random_state.shuffle(self._idx)
-
-        self._idx = self._idx[self.start_index:self.stop_index]
 
 
     def reset(self):
