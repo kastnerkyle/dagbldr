@@ -1,0 +1,17 @@
+#Hello world, it is nice to greet you.
+#Montreal is nice in the summer.
+#Romania is the land of choice.
+#Thank you for listening to me talk.
+#Without a doubt, this is the most fun I have ever had.
+#I was trained using open information.
+#Hopefully you can also have your own talking machine.
+#We are here to help if you have any questions.
+
+Bună ziua lume, este bine să vă întâmpine.
+Montreal este frumos în timpul verii.
+România este țara de alegere.
+Vă mulțumim pentru a asculta-mă să vorbesc.
+Fără îndoială, acest lucru este cel mai distractiv am avut-o vreodată.
+Am fost antrenat folosind informații deschise.
+Să sperăm că puteți avea, de asemenea, propria mașină vorbesc.
+Suntem aici pentru a ajuta dacă aveți întrebări.
