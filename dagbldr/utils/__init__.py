@@ -5,3 +5,4 @@ from ..core import *
 from .utils import *
 from .test_utils import *
 from .algorithms import *
+from .audio import *

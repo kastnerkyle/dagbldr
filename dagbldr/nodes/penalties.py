@@ -507,6 +507,45 @@ def gaussian_log_kl(list_of_mu_inputs, list_of_log_sigma_inputs):
     return kl
 
 
+def gaussian_gaussian_log_kl(list_of_mu_posterior, list_of_logsigma_posterior,
+                             list_of_mu_prior, list_of_logsigma_prior):
+    """
+    Kullback-Liebler divergence between a two multi-dimensional
+    gaussians
+
+    See discussion
+    https://stats.stackexchange.com/questions/7440/kl-divergence-between-two-univariate-gaussians
+
+    Parameters
+    ----------
+    NULL
+    list_of_mu_inputs : list of tensors, each shape 2D or 3D
+        The inputs to treat as mu values, normally coming from
+        linear_layer
+
+    list_of_log_sigma_inputs : list of tensors, each shape 2D or 3D
+        The inputs to treat as sigma values, normally coming from
+        linear_layer
+
+    Returns
+    -------
+    kl : tensor, shape .shape
+        Kullback-Liebler divergence
+
+    """
+    conc_posterior_mu = concatenate(list_of_mu_posterior)
+    conc_posterior_logsigma = concatenate(list_of_logsigma_posterior)
+    conc_prior_mu = concatenate(list_of_mu_prior)
+    conc_prior_logsigma = concatenate(list_of_logsigma_prior)
+    lsig2 = conc_prior_logsigma
+    lsig1 = conc_posterior_logsigma
+    mu2 = conc_prior_mu
+    mu1 = conc_posterior_mu
+    kl = -0.5 * (2 * lsig2 - 2 * lsig1 +
+                (tensor.exp(lsig1) ** 2 + (mu1 - mu2) ** 2) / (tensor.exp(lsig2) ** 2) - 1)
+    return kl
+
+
 def _epslog(x):
     return tensor.cast(tensor.log(tensor.clip(x, 1E-12, 1E12)),
                        theano.config.floatX)

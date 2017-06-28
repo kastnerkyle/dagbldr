@@ -3,9 +3,10 @@
 from theano import tensor
 import theano
 import numpy as np
+from theano.sandbox.rng_mrg import MRG_RandomStreams
 
 from ..utils import concatenate, as_shared
-from ..core import get_logger, get_type, set_shared
+from ..core import get_logger, get_type, set_shared, get_default_theano_rng
 from .nodes import projection
 from .nodes import np_tanh_fan_uniform
 from .nodes import np_tanh_fan_normal
@@ -14,6 +15,8 @@ from .nodes import np_normal
 from .nodes import np_zeros
 from .nodes import np_ortho
 from .nodes import get_name
+from .nodes import relu
+from .nodes import linear
 from .nodes import linear_activation
 
 logger = get_logger()
@@ -286,6 +289,110 @@ def gru(step_input, previous_state, list_of_input_dims, hidden_dim,
     next_state = (next_state * update) + (previous_state * (1. - update))
     next_state = mask[:, None] * next_state + (1. - mask[:, None]) * previous_state
     return next_state
+
+
+def vrnn(step_input, previous_state, list_of_input_dims, hidden_dim,
+         sample, cell_type="gru", mask=None, name=None, random_state=None,
+         strict=True, init_func="default"):
+    """
+    WARNING: After your scan loop, be sure to put this
+    whatever_stuff, updates = scan()
+    for k, v in updates.iteritems():
+        k.default_update = v
+    sample should be a TensorVariable, in order to turn on or off sampling for z
+    """
+    if name is None:
+        name = get_name()
+
+    if mask is None:
+        mask = tensor.alloc(1., step_input.shape[0], 1)
+
+    U_name = name + "_vrnn_recurrent_U"
+    input_dim = np.sum(list_of_input_dims)
+    if init_func == "default":
+        forward_init = None
+        hidden_init = "ortho"
+    elif init_func == "normal":
+        forward_init = "normal"
+        hidden_init = "normal"
+    else:
+        raise ValueError("Unknown init_func for gru: %s" % init_func)
+
+    if cell_type == "gru":
+        true_input_dim = 3 * input_dim
+        true_hidden_dim = 3 * hidden_dim
+    else:
+        raise ValueError("cell_type LSTM not yet supported")
+    phi = relu(
+        list_of_inputs=[step_input, previous_state],
+        list_of_input_dims=[true_input_dim, hidden_dim],
+        proj_dim=true_hidden_dim, name=name + "_phi", random_state=random_state,
+        strict=strict)
+    phi_mu = linear(
+            list_of_inputs=[phi],
+            list_of_input_dims=[true_hidden_dim],
+            proj_dim=true_hidden_dim, name=name + "_phi_mu", random_state=random_state,
+            strict=strict)
+    phi_logsigma = linear(
+            list_of_inputs=[phi],
+            list_of_input_dims=[true_hidden_dim],
+            proj_dim=true_hidden_dim, name=name + "_phi_logsigma", random_state=random_state,
+            strict=strict)
+    prior = relu(
+        list_of_inputs=[previous_state],
+        list_of_input_dims=[hidden_dim],
+        proj_dim=true_hidden_dim, name=name + "_prior", random_state=random_state,
+        strict=strict)
+    prior_mu = linear(
+            list_of_inputs=[prior],
+            list_of_input_dims=[true_hidden_dim],
+            proj_dim=true_hidden_dim, name=name + "_prior_mu", random_state=random_state,
+            strict=strict)
+    prior_logsigma = linear(
+            list_of_inputs=[prior],
+            list_of_input_dims=[true_hidden_dim],
+            proj_dim=true_hidden_dim, name=name + "_prior_logsigma", random_state=random_state,
+            strict=strict)
+
+    theano_rng = get_default_theano_rng()
+    epsilon = theano_rng.normal(size=(phi_mu.shape[0],
+                                      true_hidden_dim),
+                                avg=0., std=1.,
+                                dtype=theano.config.floatX)
+    z_sample = phi_mu + tensor.exp(phi_logsigma) * epsilon
+    z_fixed = phi_mu
+    z = sample * z_sample + (1 - sample) * z_fixed
+    comb_step = relu(
+        list_of_inputs=[step_input, z],
+        list_of_input_dims=[true_input_dim, true_hidden_dim],
+        proj_dim=true_hidden_dim, name=name + "_comb_step",
+        random_state=random_state,
+        strict=strict)
+
+    _, _, np_U = gru_weights(input_dim, hidden_dim, random_state=random_state,
+                             forward_init=forward_init, hidden_init=hidden_init)
+    U_full = as_shared(np_U)
+    set_shared(U_name, U_full)
+
+    dim = hidden_dim
+    def _s(p, d):
+        return p[:, d * dim:(d+1) * dim]
+
+    Wur = U_full[:, dim:]
+    gate_inp = comb_step[:, dim:]
+
+    U = _s(U_full, 0)
+    state_inp = _s(comb_step, 0)
+
+    gates = tensor.nnet.sigmoid(tensor.dot(previous_state, Wur) + gate_inp)
+    update = gates[:, :dim]
+    reset = gates[:, dim:]
+
+    p = tensor.dot(state_inp * reset, U)
+    next_state = tensor.tanh(p + state_inp)
+    next_state = (next_state * update) + (previous_state * (1. - update))
+    next_state = mask[:, None] * next_state + (1. - mask[:, None]) * previous_state
+    return next_state, phi_mu, phi_logsigma, prior_mu, prior_logsigma, z
 
 
 def gaussian_attention(list_of_step_inputs, list_of_step_input_dims,
