@@ -386,9 +386,16 @@ def find_dagbldr_lookup_file(force_match=None, quick_check=False):
         lu_path = os.path.join(lookup_path, fi)
         res = read_dagbldr_lookup_file(lu_path)
         if force_match is None:
+            rh = str(res["run_path"].split(os.sep)[-1].split(".")[0])
+
+            if self_name == rh:
+                logger.info("magic_reload match found at %s, reloading weights and stats" % lu_path)
+                matches.append(res)
+            """
             if str(res["script_hash"]).strip() == self_hash:
                 logger.info("magic_reload match found at %s, reloading weights and stats" % lu_path)
                 matches.append(res)
+            """
         else:
             # exact match
             rh = force_match == res["run_path"].split(os.sep)[-1].split(".")[0]
@@ -624,10 +631,12 @@ def fetch_checkpoint_dict(list_of_match_strings,
         if model_dir[-1] != "/":
             model_dir += "/"
         local_hostname = socket.gethostname()
+        print("Found file at %s" % info['hostname'])
         if local_hostname != info['hostname']:
             # file is remote
+            print("ssh %s 'ls %s'" % (info['hostname'], model_dir))
             res = pe("ssh %s 'ls %s'" % (info['hostname'], model_dir),
-                    shell=True, verbose=False)
+                     shell=True, verbose=False)
             remote_match_paths = [r for r in res if info['uuid'] in r]
             if len(remote_match_paths) == 1:
                 remote_path = remote_match_paths[0]
@@ -776,12 +785,12 @@ def set_checkpoint_import_time(time_str):
     checkpoint_import_time = time_str
 
 
-def get_dagbldr_models_dir(verbose=True):
+def get_dagbldr_models_dir(special_check=True, verbose=True):
     checkpoint_dir = os.getenv("DAGBLDR_MODELS", os.path.join(
         os.path.expanduser("~"), "dagbldr_models"))
 
     # Figure out if this is necessary to run on localdisk @ U de M
-    if _special_check(verbose=verbose):
+    if special_check and _special_check(verbose=verbose):
         checkpoint_dir = "/Tmp/" + USER + "/dagbldr_models"
     return checkpoint_dir
 
