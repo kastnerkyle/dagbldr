@@ -695,7 +695,7 @@ def fetch_checkpoint_dict(list_of_match_strings,
 
                     pe(cmd_string, shell=True)
                     with open(local_cache, "rb") as f:
-                        loaded_cd = pickle.load(f)
+                        loaded_cd = pickle.loads(pickle.load(f))
                     break
                 except EOFError:
                     idx += 1
@@ -760,7 +760,7 @@ def fetch_checkpoint_dict(list_of_match_strings,
 
             pe(cmd_string, shell=True)
             with open(local_cache, "rb") as f:
-                loaded_cd = pickle.load(f)
+                loaded_cd = pickle.loads(pickle.load(f))
             return loaded_cd
 
 
@@ -942,6 +942,7 @@ def make_word_level_from_text(text, tokenizer="default"):
 
 def dpickle(save_path, pickle_item):
     """ Simple wrapper for checkpoint dictionaries """
+    raise ValueError("To Remove")
     old_recursion_limit = sys.getrecursionlimit()
     sys.setrecursionlimit(40000)
     with open(save_path, mode="wb") as f:
@@ -951,6 +952,7 @@ def dpickle(save_path, pickle_item):
 
 def dunpickle(save_path):
     """ Simple pickle wrapper for checkpoint dictionaries """
+    raise ValueError("To Remove")
     old_recursion_limit = sys.getrecursionlimit()
     sys.setrecursionlimit(40000)
     with open(save_path, mode="rb") as f:
@@ -1021,7 +1023,7 @@ def load_checkpoint(saved_checkpoint_path):
     old_recursion_limit = sys.getrecursionlimit()
     sys.setrecursionlimit(40000)
     with open(saved_checkpoint_path, mode="rb") as f:
-        pickle_item = dill.load(f)
+        pickle_item = pickle.loads(pickle.load(f))
     sys.setrecursionlimit(old_recursion_limit)
     return pickle_item
 
@@ -1432,6 +1434,7 @@ def apply_function_over_minibatch(function, list_of_minibatch_args,
 def save_best_functions(train_function, valid_function, optimizer_object=None,
                          fname="__functions.pkl"):
     if not in_nosetest():
+        raise ValueError("To Remove")
         checkpoint_dir = get_checkpoint_dir()
         save_path = os.path.join(checkpoint_dir, fname)
         dpickle(save_path, {"train_function": train_function,
@@ -1441,6 +1444,7 @@ def save_best_functions(train_function, valid_function, optimizer_object=None,
 
 def load_best_functions(fname="__functions.pkl"):
     if not in_nosetest():
+        raise ValueError("To Remove")
         checkpoint_dir = get_checkpoint_dir()
         save_path = os.path.join(checkpoint_dir, fname)
         chk = dunpickle(save_path)
@@ -2185,6 +2189,13 @@ def run_loop(train_loop_function, train_itr,
         else:
             fcw = threaded_timed_writer(sleep_time=0, tag="force")
 
+        checkpoint_save_path = "%s_model_checkpoint_%i.pkl" % (ident, 0)
+        objective = np.inf
+        fcw.send((objective,
+                 None,
+                 None,
+                 (checkpoint_save_path, _dumps(checkpoint_dict))))
+
     best_train_checkpoint_pickle = None
     best_train_checkpoint_epoch = 0
     best_valid_checkpoint_pickle = None
@@ -2245,10 +2256,11 @@ def run_loop(train_loop_function, train_itr,
                         results_save_path = "%s_model_update_results_%i.html" % (ident, train_mb_count)
                         # Use pickle to preserve relationships between keys
                         # while still copying buffers
-                        if not skip_minimums:
+                        if not skip_minimums or not skip_all_save:
                             copy_pickle = _dumps(checkpoint_dict)
-                            copy_dict = pickle.loads(copy_pickle)
-                            del copy_pickle
+                            copy_dict = copy_pickle
+                            #copy_dict = pickle.loads(copy_pickle)
+                            #del copy_pickle
 
                         logger.info("Update checkpoint after train mb %i" % train_mb_count)
                         logger.info("Current mean cost %f" % np.mean(partial_train_costs))
@@ -2284,10 +2296,11 @@ def run_loop(train_loop_function, train_itr,
                         results_save_path = "%s_model_time_results_%i.html" % (ident, int(time_diff))
                         # Use pickle to preserve relationships between keys
                         # while still copying buffers
-                        if not skip_minimums:
+                        if not skip_minimums or not skip_all_save:
                             copy_pickle = _dumps(checkpoint_dict)
-                            copy_dict = pickle.loads(copy_pickle)
-                            del copy_pickle
+                            copy_dict = copy_pickle
+                            #copy_dict = pickle.loads(copy_pickle)
+                            #del copy_pickle
 
                         logger.info("Time checkpoint after train mb %i" % train_mb_count)
                         logger.info("Current mean cost %f" % np.mean(partial_train_costs))
@@ -2576,8 +2589,7 @@ def run_loop(train_loop_function, train_itr,
                     if not skip_minimums:
                         best_valid_checkpoint_pickle = _dumps(checkpoint_dict)
                         best_valid_checkpoint_epoch = e
-                        # preserve key relations
-                        copy_dict = pickle.loads(best_valid_checkpoint_pickle)
+                        copy_dict = best_valid_checkpoint_pickle #pickle.loads(best_valid_checkpoint_pickle)
 
                     objective = mean_epoch_valid_cost
                     if not skip_all_save:
@@ -2610,7 +2622,7 @@ def run_loop(train_loop_function, train_itr,
                         best_train_checkpoint_pickle = _dumps(checkpoint_dict)
                         best_train_checkpoint_epoch = e
                         # preserve key relations
-                        copy_dict = pickle.loads(best_train_checkpoint_pickle)
+                        copy_dict = best_train_checkpoint_pickle #pickle.loads(best_train_checkpoint_pickle)
 
                     objective = mean_epoch_train_cost
                     if not skip_all_save:
@@ -2633,7 +2645,7 @@ def run_loop(train_loop_function, train_itr,
                     # while still copying buffers
                     if not skip_all_save:
                         copy_pickle = _dumps(checkpoint_dict)
-                        copy_dict = pickle.loads(copy_pickle)
+                        copy_dict = copy_pickle #pickle.loads(copy_pickle)
 
                     objective = mean_epoch_train_cost
 
@@ -2687,10 +2699,11 @@ def run_loop(train_loop_function, train_itr,
 
         objective = -np.inf
         if not skip_all_save:
+            new_dump = _dumps(best_valid_checkpoint_dict)
             fcw.send((objective,
                      (results_save_path, best_valid_results_dict),
-                     (weights_save_path, best_valid_checkpoint_dict),
-                     (checkpoint_save_path, best_valid_checkpoint_dict)))
+                     (weights_save_path, new_dump),
+                     (checkpoint_save_path, new_dump)))
 
         best_train_checkpoint_dict = pickle.loads(best_train_checkpoint_pickle)
         best_train_results_dict = {k: v for k, v in best_train_checkpoint_dict.items()
@@ -2703,10 +2716,11 @@ def run_loop(train_loop_function, train_itr,
         objective = -np.inf
 
         if not skip_all_save:
+            new_dump = _dumps(best_train_checkpoint_dict)
             fcw.send((objective,
                      (results_save_path, best_train_results_dict),
-                     (weights_save_path, best_train_checkpoint_dict),
-                     (checkpoint_save_path, best_train_checkpoint_dict)))
+                     (weights_save_path, new_dump),
+                     (checkpoint_save_path, new_dump)))
 
     logger.info("Loop finished, closing write threads (this may take a while!)")
     # set FINALIZE_TRAINING so that write threads know it is time to close
