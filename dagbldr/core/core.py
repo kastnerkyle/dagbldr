@@ -451,7 +451,7 @@ def find_dagbldr_lookup_file(force_match=None, quick_check=False):
     logger.info("Fetching using fetch command '%s'" % cmd_string)
     pe(cmd_string, shell=True)
     with open(local_cache, "rb") as f:
-        loaded_cd = pickle.load(f)
+        loaded_cd = pickle.loads(pickle.load(f))
     set_checkpoint_uuid(cached_uuid)
     return loaded_cd
 

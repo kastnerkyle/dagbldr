@@ -279,7 +279,6 @@ cost_function = theano.function(in_args, out_args)
 predict_function = theano.function(in_args, pred_out_args)
 
 n_epochs = 100
-
 def train_loop(itr, extra):
     X_mb, y_mb, X_mask, y_mask = next(itr)
     y_mb = np.concatenate((0. * y_mb[0, :, :][None], y_mb))
